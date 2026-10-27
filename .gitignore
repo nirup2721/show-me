@@ -1,0 +1,22 @@
+# secrets: never commit keys
+.env
+.env.*
+*.key
+
+# local photos and recordings of the station
+test-images/
+*.wav
+
+# cost logs
+costs.jsonl
+
+# node / python
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# editors / os
+.DS_Store
+Thumbs.db
+.vscode/
