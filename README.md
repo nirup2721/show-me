@@ -20,14 +20,39 @@ Two gas stations with convenience stores in North Carolina. New staff face a cof
 
 A thin phone web page talks to a small server that holds the API key and logs every call's cost. The design follows the thin-client, gateway-in-the-middle pattern from Meta's "Smart glasses with OpenClaw" cookbook recipe.
 
-## Models
+## Models, and exactly which call runs where
 
-| Job | Model |
-|---|---|
-| Speech to text | Muse Voice Transcribe 1.0 (Meta Model API) |
-| Vision, reasoning, step checking | Muse Spark 1.3 (Meta Model API) |
-| Segmentation | SAM 3.1 (Meta Model API) |
-| Text to speech | On-device (Web Speech API) |
+Two backends are used. Every call below is routed by the server; the phone never calls a model directly.
+
+| Call | What it does | Breaker panel | All other objects |
+|---|---|---|---|
+| `identify_part` | Names the object and the part to touch first, returns the part's bounding box, the step list with the expected visual evidence for each step, and any label it reads | **Muse Spark Open** (`meta-models/muse-spark-open-1026`, open weights, served by Baseten) | Muse Spark 1.3, Meta Model API |
+| `verify_step` | Independent check of a fresh camera frame against the step's expected evidence. Runs inside the advance-step tool so the main agent cannot skip it | Muse Spark 1.3, Meta Model API | Muse Spark 1.3, Meta Model API |
+| `outline_part` | Turns the box into a tight outline | SAM 3.1, Meta Model API | SAM 3.1, Meta Model API |
+| `transcribe` | Speech to text, push-to-talk | Muse Voice Transcribe 1.0, Meta Model API | same |
+| Speak | Text to speech | On-device (Web Speech API) | same |
+
+So the open-weights claim is one precise sentence: **Muse Spark Open identifies the breaker; everything else runs on the Meta Model API.** The first frame of every task goes to both backends at once; if Muse Spark 1.3 reports a breaker panel, the app uses Muse Spark Open's answer for that frame, otherwise it uses Muse Spark 1.3's. The verifier is always Muse Spark 1.3, so on the panel the model that identifies the part is not the model that checks the step.
+
+### Why that split: the Day-1 comparison (Oct 27, 2026)
+
+Same 8 photos of the real equipment, same prompt, same JSON schema, 768x1024 frames. Boxes scored by eye: Good = centre inside the part and box at most 1.5x the part; Close = overlapping but off-centre or oversized; Wrong = a different part.
+
+| Photo | Muse Spark 1.3 (Meta) | Muse Spark Open (Baseten) |
+|---|---|---|
+| Coffee machine, 1 m | Good | Wrong |
+| Coffee machine, close | Good | Good |
+| Fuel pump, 3 m | Wrong | Wrong |
+| Fuel pump, close | Good | Good |
+| Fire extinguisher, 1.5 m | Good | Good |
+| Fire extinguisher, close | Good | Good |
+| Breaker panel, 1 m | Close | Close |
+| Breaker panel, close | Close | Good |
+| Tally | 5 Good, 2 Close, 1 Wrong | 5 Good, 1 Close, 2 Wrong |
+| Accepts images / holds JSON schema | yes / 8 of 8 | yes / 8 of 8 |
+| Seconds per call (average) | 4.9 | 7.4 |
+
+Muse Spark Open drew tighter boxes on the breaker panel and missed the coffee machine at 1 m, so it gets the panel and Muse Spark 1.3 gets the rest. Both are priced at $1.25 per 1M input and $4.25 per 1M output tokens.
 
 ## Status
 
