@@ -146,12 +146,23 @@ function drawOne(ctx, o, r, k, s) {
   }
   ctx.restore();
   if (!s.label) return;
-  const [bx, by] = o.box || o.bounds;
+  const [bx, by, bx2, by2] = o.box || o.bounds;
   const sx = r.x + bx * k, sy = r.y + by * k;
   ctx.font = "600 14px 'Instrument Sans', system-ui, sans-serif";
   const tw = ctx.measureText(s.label).width, ph = 28, pw = tw + 22;
+  // Keep the pill fully on screen, above the outline when there is room, else just inside its top edge.
   const px = Math.min(Math.max(6, sx), overlay.clientWidth - pw - 6);
-  const py = Math.max(6, sy - ph - 8);
+  let py = sy - ph - 8;
+  if (py < 6) py = Math.max(6, sy + 6);
+  py = Math.min(py, overlay.clientHeight - ph - 6);
+  // Do not overlap pills already placed (look-around draws several): step down until clear.
+  if (s.placed) {
+    const hits = (y) => s.placed.some((p) => px < p.x + p.w + 6 && px + pw + 6 > p.x && y < p.y + p.h + 4 && y + ph + 4 > p.y);
+    let tries = 0;
+    while (hits(py) && tries++ < 12) py += ph + 6;
+    if (py > overlay.clientHeight - ph - 6) { py = sy - ph - 8; while (hits(py) && py > 6) py -= ph + 6; py = Math.max(6, py); }
+    s.placed.push({ x: px, y: py, w: pw, h: ph });
+  }
   ctx.fillStyle = s.pillFill || "rgba(6,9,13,0.88)";
   ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 14); ctx.fill();
   ctx.strokeStyle = s.stroke; ctx.lineWidth = 1.5; ctx.setLineDash([]); ctx.stroke();
@@ -183,14 +194,23 @@ function drawOutline(opts = {}) {
 let survey = null;      // {objects:[{name, box, outline}], frame_size, frame_id, chosen}
 function drawSurvey(ctx) {
   const r = displayedRect(), k = r.w / survey.frame_size[0];
-  survey.objects.forEach((obj, i) => {
+  const placed = [];   // pill rectangles already drawn, so later pills step aside
+  const order = survey.objects.map((o, i) => i).sort((a, b) => survey.objects[a].box[1] - survey.objects[b].box[1]);  // top to bottom
+  for (const i of order) {
+    const obj = survey.objects[i];
     const chosen = survey.chosen === i, dimmed = survey.chosen != null && !chosen;
     drawOne(ctx, obj.outline || { kind: "box", box: obj.box }, r, k, {
       stroke: dimmed ? "rgba(79,227,255,0.35)" : chosen ? "#FFFFFF" : ACCENT, width: chosen ? 4 : 3,
       fill: dimmed ? "rgba(79,227,255,0.05)" : chosen ? "rgba(255,255,255,0.18)" : "rgba(79,227,255,0.14)",
-      label: obj.name, text: dimmed ? "#8A9099" : "#EAF7FA", pillFill: chosen ? "rgba(79,227,255,0.25)" : undefined,
+      label: obj.name, text: dimmed ? "#8A9099" : "#EAF7FA", pillFill: chosen ? "rgba(79,227,255,0.25)" : undefined, placed,
     });
-  });
+  }
+}
+const article = (n) => (/^[aeiou]/i.test(n) ? "an " : "a ") + n;
+function listSentence(names) {
+  if (!names.length) return "";
+  const a = names.map(article);
+  return "I see " + (a.length === 1 ? a[0] : a.slice(0, -1).join(", ") + " and " + a[a.length - 1]) + ".";
 }
 function surveyHit(clientX, clientY) {
   if (!survey) return -1;
@@ -225,7 +245,7 @@ async function lookAround() {
     overlay.style.pointerEvents = survey.objects.length ? "auto" : "none";
     $("surveyCount").textContent = survey.objects.length ? `Looking around · ${survey.objects.length} thing${survey.objects.length === 1 ? "" : "s"} in view` : "Looking around";
     $("surveyHead").textContent = s.prompt;
-    speak(survey.objects.length ? `${s.prompt} ${survey.objects.map((o) => o.name).join(", ")}.` : s.prompt);
+    speak(survey.objects.length ? `${listSentence(survey.objects.map((o) => o.name))} ${s.prompt}` : s.prompt);
     setTop("survey"); setBottom("listen"); drawOutline();
   } catch (e) { fail(e.message); }
   busy = false;
@@ -420,7 +440,7 @@ function askAgain() {
   run = null; prevStep = -1; survey = null; overlay.style.pointerEvents = "none"; speechSynthesis.cancel();
   for (const k in timing) delete timing[k]; footer(); $("run").textContent = "";
   show("s-done", false); screen("live"); drawOutline();
-  setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Point at the machine, then hold the mic and ask.";
+  setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Hold the mic and ask, or tap the camera to look around.";
   setBottom("listen");
 }
 $("next").addEventListener("click", advance);
