@@ -11,7 +11,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.1.4"  # bump on every deploy so /health shows which code is live
+VERSION = "0.1.5"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -82,14 +82,19 @@ async def start_run(question: str = Form(...), frame: UploadFile = File(...)):
         data_url, w, h = models.frame_from_bytes(await frame.read())
         tools.run("identify_part", run, frame=data_url, width=w, height=h)
         outline = tools.run("outline_part", run, frame=data_url)
+        warning = " ".join(x for x in (run.get("safety_warning", ""), run.get("prep", "")) if x)
+        label = f", labeled {run['matched_label']}" if run["matched_label"] and run.get("label_matches_question") else ""
+        obj = f"{run['object_name']}{label}. Start with the {run['part_name']}."
         if outline["kind"] == "too_far":
-            runs.set_status(run, "needs_input", f"I think this is the {run['object_name']}, but I can't see the "
-                                                f"{run['part_name']} well. Move closer so it fills more of the screen, then tap Done.")
+            runs.set_status(run, "needs_input")
+            runs.set_display(run, warning=warning, object_=obj,
+                             step=f"I can't see the {run['part_name']} well. Move closer so it fills more of the screen, then tap Done.")
+        elif run["steps"]:
+            runs.set_status(run, "guiding")
+            runs.set_display(run, warning=warning, object_=obj, step=f"Step 1. {run['steps'][0]['instruction']}")
         else:
-            warn = (run["safety_warning"] + " ") if run["safety_warning"] else ""
-            label = f" It's labeled {run['matched_label']}." if run["matched_label"] and run.get("label_matches_question") else ""
-            runs.set_status(run, "guiding", f"{warn}This is the {run['object_name']}. Start with the {run['part_name']}.{label} "
-                                            f"Step 1. {run['steps'][0]['instruction']}" if run["steps"] else "I couldn't work out the steps.")
+            runs.set_status(run, "failed")
+            runs.set_display(run, warning=warning, object_=obj, step="I couldn't work out the steps.")
     except costs.BudgetExhausted as e:
         runs.set_status(run, "failed", str(e))
     except Exception as e:
@@ -116,6 +121,7 @@ async def advance(run_id: str, frame: UploadFile = File(...)):
                 runs.set_status(run, "needs_input", "Still too far. Get within arm's reach of the part and tap Done.")
             else:
                 runs.set_status(run, "guiding", f"Step 1. {run['steps'][0]['instruction']}")
+            run["message"] = run["display"]["step"]  # after re-identify, speak only the step line
         else:
             tools.run("advance_step", run, frame=data_url)
             if run["status"] == "guiding" and run.get("outline") is None:

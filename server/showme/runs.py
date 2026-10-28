@@ -43,7 +43,8 @@ def new_run(question: str) -> dict:
         "identify": None,          # which backend answered, timing, the discarded answer's summary
         "steps": [],               # {instruction, part, expected_evidence, status, confirmed_by, tries, verdicts[]}
         "current_step": 0,
-        "message": "",             # what the phone should say right now
+        "message": "",             # what the phone should say right now (spoken, all lines joined)
+        "display": {"warning": "", "object": "", "step": ""},   # the three lines the phone shows: small, medium, large
         "outline": None,           # SAM result for the current step's part, or Spark box fallback
         "events": [],              # [{ts, type, ...}]
         "cost_usd": 0.0,
@@ -81,11 +82,22 @@ def event(run: dict, type_: str, **data):
 
 
 def set_status(run: dict, status: str, message: str | None = None):
+    """Set the status and, when a message is given, the spoken text and the big 'step' line of the display."""
     assert status in STATUSES, status
     run["status"] = status
     if message is not None:
         run["message"] = message
+        run.setdefault("display", {"warning": "", "object": "", "step": ""})["step"] = message
     event(run, "status", status=status)
+
+
+def set_display(run: dict, warning: str | None = None, object_: str | None = None, step: str | None = None):
+    """The three lines the phone shows. The spoken message is the non-empty lines joined."""
+    d = run.setdefault("display", {"warning": "", "object": "", "step": ""})
+    if warning is not None: d["warning"] = warning
+    if object_ is not None: d["object"] = object_
+    if step is not None: d["step"] = step
+    run["message"] = " ".join(x for x in (d["warning"], d["object"], d["step"]) if x)
 
 
 def add_cost(run: dict, usd: float):

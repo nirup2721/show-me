@@ -69,6 +69,7 @@ def run(run_record: dict, frame: str, width: int, height: int) -> dict:
         "object_name": answer["object_name"], "object_class": object_class, "part_name": answer["part_name"],
         "matched_label": answer.get("matched_label", ""), "label_matches_question": answer.get("label_matches_question"),
         "safety_warning": answer.get("safety_warning", ""),
+        "prep": answer.get("prep", ""),
         "frame_size": [width, height],
         "bbox_px": _box_px(answer["bbox"], width, height),
         "steps": steps, "current_step": 0,

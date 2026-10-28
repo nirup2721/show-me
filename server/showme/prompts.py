@@ -12,6 +12,7 @@ IDENTIFY_SCHEMA = {
         "matched_label": {"type": "string", "description": "Exact label text read on or beside the part; empty if none."},
         "label_matches_question": {"type": "boolean"},
         "safety_warning": {"type": "string"},
+        "prep": {"type": "string", "description": "Things to have ready BEFORE step 1 that the camera cannot check, as one short sentence, e.g. 'Have a cup ready.' Empty if none."},
         "steps": {
             "type": "array",
             "items": {
@@ -26,7 +27,7 @@ IDENTIFY_SCHEMA = {
             },
         },
     },
-    "required": ["object_name", "part_name", "bbox", "matched_label", "label_matches_question", "safety_warning", "steps"],
+    "required": ["object_name", "part_name", "bbox", "matched_label", "label_matches_question", "safety_warning", "prep", "steps"],
     "additionalProperties": False,
 }
 
@@ -38,7 +39,11 @@ IDENTIFY_PROMPT = (
     "If no label names it, pick the closest part anyway but set label_matches_question to false. "
     "Give a safety warning of at most 20 words if this is electrical or fuel equipment, else an empty string. "
     "Everything you write is read aloud by a phone, so keep part_name to 4 words and every sentence short.\n"
-    "Then list the steps, at most {max_steps}, one short sentence each. For EVERY step also write expected_evidence: one "
+    "Then list the steps, at most {max_steps}, one short sentence each. Every step must be an action ON THE MACHINE in "
+    "this photo whose result the camera can see from where the user is standing. Step 1 in particular must be "
+    "verifiable in this very frame (for a touchscreen machine, step 1 is tapping the screen to wake the menu, not "
+    "fetching a cup). Anything the user should fetch or have ready that the camera cannot check (a cup, a key, a card) "
+    "goes in prep as one short sentence, e.g. 'Have a cup ready.', not in the steps. For EVERY step also write expected_evidence: one "
     "sentence describing what a photo taken right after that step will show if the step was done. Rules: name a specific "
     "visible thing and its state (for example 'a paper cup is standing on the drip tray under the spout', 'the screen shows "
     "the drink menu instead of the idle picture'). It must be checkable from one photo by someone who did not see the step "

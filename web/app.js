@@ -32,7 +32,11 @@ function getKey() {
 let KEY = "";
 
 // ---------- status + speech ----------
-function setStatus(text, cls = "") { statusEl.textContent = text; statusEl.className = cls; }
+function setStatus(text, cls = "") { statusEl.textContent = text; statusEl.className = "line " + cls; }
+function setLines(d) {
+  $("warn").textContent = (d && d.warning) || "";
+  $("obj").textContent = (d && d.object) || "";
+}
 function speak(text) {
   if (!("speechSynthesis" in window) || !text) return;
   speechSynthesis.cancel();
@@ -127,11 +131,22 @@ function drawOutline() {
     const [x1, y1, x2, y2] = o.box;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
   }
-  // label
-  const [x1, y1] = o.box || o.bounds;
-  ctx.font = `${16 / k}px system-ui`; ctx.fillStyle = "#35d07f";
-  ctx.fillText(run.part_name || "", x1, Math.max(14 / k, y1 - 6 / k));
   ctx.restore();
+  // label in a dark pill, drawn in screen pixels so it stays readable at any zoom
+  const [bx, by] = o.box || o.bounds;
+  const label = run.part_name || "";
+  if (label) {
+    const sx = r.x + bx * k, sy = r.y + by * k;
+    ctx.font = "600 14px system-ui, sans-serif";
+    const tw = ctx.measureText(label).width, ph = 24, pw = tw + 20;
+    const px = Math.min(Math.max(4, sx), overlay.clientWidth - pw - 4);
+    const py = Math.max(4, sy - ph - 6);
+    ctx.fillStyle = "rgba(10,10,12,0.85)";
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 12); ctx.fill();
+    ctx.strokeStyle = "#35d07f"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.textBaseline = "middle";
+    ctx.fillText(label, px + 10, py + ph / 2);
+  }
 }
 window.addEventListener("resize", drawOutline);
 cam.addEventListener("loadedmetadata", drawOutline);
@@ -150,7 +165,8 @@ function render(r) {
   $("run").textContent = r.id ? `run ${r.id}` : "";
   $("cost").textContent = r.cost_usd ? `· $${r.cost_usd.toFixed(3)}` : "";
   const cls = { guiding: "", needs_input: "warn", done: "ok", failed: "bad" }[r.status] || "";
-  setStatus(r.message || "", cls);
+  setLines(r.display);
+  setStatus((r.display && r.display.step) || r.message || "", cls);
   speak(r.message);
   drawOutline();
   actions.hidden = false;
@@ -193,6 +209,7 @@ async function confirmHuman() {
 
 function restart() {
   run = null; actions.hidden = true; drawOutline(); speechSynthesis.cancel();
+  setLines(null);
   setStatus("Point the camera at the machine, then hold the mic and ask.");
 }
 
