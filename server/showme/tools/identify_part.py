@@ -31,17 +31,30 @@ def _box_px(bbox: dict, w: int, h: int) -> list[int]:
 def run(run_record: dict, frame: str, width: int, height: int) -> dict:
     prompt = prompts.IDENTIFY_PROMPT.format(question=run_record["question"], max_steps=config.MAX_STEPS)
     backends = ["meta"] + (["baseten"] if config.has_backend("baseten") else [])
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {b: pool.submit(_ask, b, prompt, frame, run_record["id"]) for b in backends}
-        results = {b: f.result() for b, f in futures.items()}
+    pool = ThreadPoolExecutor(max_workers=2)
+    futures = {b: pool.submit(_ask, b, prompt, frame, run_record["id"]) for b in backends}
+    results = {"meta": futures["meta"].result()}       # Meta decides the object class, so wait for it first
 
     meta_answer, meta_meta = results["meta"]
     if meta_answer is None:
+        pool.shutdown(wait=False)
         raise models.SparkError("identify failed on Meta: " + meta_meta.get("error", "?"))
     object_class = config.object_class_of(meta_answer["object_name"])
     chosen = config.route("identify_part", object_class)
+    if chosen != "meta" and chosen in futures:
+        # Only the breaker panel waits for the open-weights answer (at most BASETEN_WAIT_S more).
+        try:
+            results[chosen] = futures[chosen].result(timeout=config.BASETEN_WAIT_S)
+        except Exception as e:
+            results[chosen] = (None, {"backend": chosen, "error": f"timed out or failed: {str(e)[:100]}"})
+    else:
+        for b in futures:
+            if b != "meta":
+                results[b] = (None, {"backend": b, "error": "not needed for this object; not awaited"})
+    pool.shutdown(wait=False)  # a still-running secondary call finishes and logs its cost on its own
+
     answer, meta = results.get(chosen, (None, None))
-    if answer is None:  # routed backend failed or absent: fall back to Meta
+    if answer is None:  # routed backend failed, timed out or absent: fall back to Meta
         chosen, answer, meta = "meta", meta_answer, meta_meta
 
     for b, (a, m) in results.items():

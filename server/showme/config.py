@@ -37,6 +37,7 @@ FRAME_MAX_SIDE = 1024
 # Arm's-reach rule: a part box narrower than this (long side, px) means "move closer", no SAM, no step.
 MIN_PART_PX = 60
 
+BASETEN_WAIT_S = 20    # breaker panel only: how long to wait for the open-weights answer after Meta has answered
 MAX_STEPS = 8          # per task
 MAX_VERIFY_TRIES = 3   # per step before needs_input
 CONSISTENCY_RUNS = 3   # offline test: same frame, same verdict, 3 of 3, before a step may appear in the video
