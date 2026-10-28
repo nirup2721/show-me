@@ -56,7 +56,9 @@ Muse Spark Open drew tighter boxes on the breaker panel and missed the coffee ma
 
 ## Status
 
-Day 1: model tests. No app code yet. See the commit history for progress.
+- Day 1 (Oct 27): model tests on the real equipment photos.
+- Day 2 (Oct 28): server deployed to a public HTTPS address on Modal; the step verifier runs as an independent call inside the advance-step tool. See [server/README.md](server/README.md).
+- Next: the phone page (camera, push-to-talk, spoken steps, outline overlay).
 
 ## License
 

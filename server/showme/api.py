@@ -5,7 +5,8 @@ from fastapi.responses import JSONResponse
 from . import config, costs, models, runs, tools
 from .tools import advance_step as advance_mod
 
-app = FastAPI(title="Show Me", version="0.1")
+VERSION = "0.1.1"  # bump on every deploy so /health shows which code is live
+app = FastAPI(title="Show Me", version=VERSION)
 
 
 def _budget_guard():
@@ -17,7 +18,7 @@ def _budget_guard():
 @app.get("/health")
 def health():
     t = costs.totals()
-    return {"ok": True, "backends": {b: config.has_backend(b) for b in ("meta", "baseten")},
+    return {"ok": True, "version": VERSION, "backends": {b: config.has_backend(b) for b in ("meta", "baseten")},
             "spend": t, "tools": [d["name"] for d in tools.definitions()]}
 
 
