@@ -130,6 +130,27 @@ def test_hedged_identify_takes_the_faster_meta_call(monkeypatch):
     assert run["identify"]["waited_s"] < 1.0
 
 
+def test_general_question_detection():
+    from showme.api import is_general
+    assert is_general("what's here?") and is_general("What can you see") and is_general("which one?") and is_general("")
+    assert not is_general("how do I start a new brew?") and not is_general("the register has no power")
+
+
+def test_survey_lists_objects_and_outlines_each(monkeypatch):
+    def spark_json(backend, prompt, data_url, schema, name, **kw):
+        return ({"scene": "store counter", "objects": [
+            {"name": "coffee machine", "bbox": {"x_min": 50, "y_min": 50, "x_max": 400, "y_max": 600}},
+            {"name": "breaker panel", "bbox": {"x_min": 500, "y_min": 100, "x_max": 900, "y_max": 900}},
+            {"name": "speck", "bbox": {"x_min": 10, "y_min": 10, "x_max": 12, "y_max": 12}}]},
+                {"backend": backend, "model": "fake", "seconds": 0.1, "usd": 0.004, "usage": {}})
+    monkeypatch.setattr("showme.models.spark_json", spark_json)
+    monkeypatch.setattr("showme.models.sam_outline", lambda box, w, h, f, rid=None: {"svg_path": "M0 0", "mask_w": 2, "mask_h": 2, "bounds": list(box), "confidence": 0.8, "seconds": 0.1})
+    out = tools.run("survey_frame", None, frame=FRAME, width=768, height=1024)
+    assert [o["name"] for o in out["objects"]] == ["coffee machine", "breaker panel"]   # the 2 px speck is dropped
+    assert all(o["outline"]["kind"] == "mask" for o in out["objects"])
+    assert abs(out["usd"] - (0.004 + 2 * config.SAM_PER_IMAGE)) < 1e-9
+
+
 def test_run_persists_and_reloads(monkeypatch):
     run = start(monkeypatch)
     again = runs.load(run["id"])

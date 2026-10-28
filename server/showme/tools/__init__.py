@@ -6,7 +6,7 @@ registry is what would let a model choose tools later without changing the tools
 """
 from importlib import import_module
 
-_NAMES = ["transcribe", "identify_part", "outline_part", "advance_step", "request_help"]
+_NAMES = ["transcribe", "survey_frame", "identify_part", "outline_part", "advance_step", "request_help"]
 _MODULES = {n: import_module(f".{n}", __name__) for n in _NAMES}
 
 

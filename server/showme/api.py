@@ -2,7 +2,7 @@
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from . import config, costs, frames, models, runs, tools
+from . import config, costs, frames, models, prompts, runs, tools
 from .tools import advance_step as advance_mod
 
 import os
@@ -11,7 +11,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.3.0"  # bump on every deploy so /health shows which code is live
+VERSION = "0.4.0"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -91,23 +91,61 @@ async def upload_frame(frame: UploadFile = File(...)):
     return frames.put(await frame.read())
 
 
+import re as _re
+
+
+def is_general(question: str) -> bool:
+    return not question.strip() or bool(_re.search(prompts.GENERAL_QUESTION, question.strip(), _re.I))
+
+
+async def _frame_from(frame: UploadFile | None, frame_id: str):
+    stored = frames.get(frame_id) if frame_id else None
+    if stored:
+        return stored
+    if frame is not None:
+        return models.frame_from_bytes(await frame.read())
+    raise HTTPException(400, "send a frame file or a valid frame_id")
+
+
+@app.post("/survey")
+async def survey(frame: UploadFile | None = File(None), frame_id: str = Form("")):
+    """Look around: every recognizable object in the frame, boxed and outlined, so the user can pick one. No task."""
+    _budget_guard()
+    data_url, w, h = await _frame_from(frame, frame_id)
+    fid = frame_id or frames.put_data_url(data_url, w, h)
+    try:
+        result = tools.run("survey_frame", None, frame=data_url, width=w, height=h)
+    except costs.BudgetExhausted as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(502, "look around failed: " + str(e)[:200])
+    result["frame_id"] = fid
+    result["prompt"] = "Which one do you need help with?" if result["objects"] else "I can't make out anything to help with here. Try pointing at the machine."
+    frames.save_survey(fid, result)
+    return result
+
+
 @app.post("/runs")
-async def start_run(question: str = Form(...), frame: UploadFile | None = File(None), frame_id: str = Form("")):
+async def start_run(question: str = Form(...), frame: UploadFile | None = File(None), frame_id: str = Form(""),
+                    focus_name: str = Form(""), focus_box: str = Form("")):
     """Question + frame (uploaded now, or earlier via /frames) -> identify and speak step 1.
     Returns as soon as identify is done; the phone then calls /runs/{id}/outline for the SAM outline so it can start
-    speaking while SAM runs."""
+    speaking while SAM runs. A general question with no object chosen is sent to look-around instead (no spend)."""
     _budget_guard()
-    run = runs.new_run(question.strip())
+    if is_general(question) and not focus_name:
+        return {"status": "survey_needed", "message": "That sounds like a look-around question.", "frame_id": frame_id}
+    run = runs.new_run(question.strip() or f"how do I use the {focus_name}?")
     try:
-        stored = frames.get(frame_id) if frame_id else None
-        if stored:
-            data_url, w, h = stored
-        elif frame is not None:
-            data_url, w, h = models.frame_from_bytes(await frame.read())
-        else:
-            raise HTTPException(400, "send a frame file or a valid frame_id")
+        data_url, w, h = await _frame_from(frame, frame_id)
         frames.keep_for_run(run["id"], data_url, w, h)
-        tools.run("identify_part", run, frame=data_url, width=w, height=h)
+        focus = None
+        if focus_name:
+            try:
+                box = [int(float(v)) for v in focus_box.split(",")] if focus_box else None
+            except ValueError:
+                box = None
+            focus = {"name": focus_name.strip(), "box": box if box and len(box) == 4 else None}
+        tools.run("identify_part", run, frame=data_url, width=w, height=h, focus=focus)
         warning = " ".join(x for x in (run.get("safety_warning", ""), run.get("prep", "")) if x)
         label = f", labeled {run['matched_label']}" if run["matched_label"] and run.get("label_matches_question") else ""
         obj = f"{run['object_name']}{label}. Start with the {run['part_name']}."

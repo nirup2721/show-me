@@ -66,6 +66,10 @@
       <div class="line1 waiting"><span id="needCount"></span></div>
       <div class="line2"><div id="needHead" class="step"></div></div>
     </div>
+    <div id="t-survey" hidden>
+      <div class="line1 waiting"><span id="surveyCount"></span></div>
+      <div class="line2"><div id="surveyHead" class="step"></div></div>
+    </div>
     <div id="bar" class="bar" hidden><i></i></div>
   </section>
 
@@ -88,14 +92,16 @@
     <div id="typed" class="panel quiet typed" hidden>
       <input id="question" type="text" placeholder="Type your question" autocomplete="off">
       <button id="ask" class="secondary">Ask</button>
+      <button id="photo" class="round secondary" title="Use a photo"><svg class="ico"><use href="#i-cam"/></svg></button>
+      <input id="file" type="file" accept="image/*" capture="environment" hidden>
     </div>
 
     <div id="c-listen" class="controls" hidden>
       <button id="type" class="round secondary" title="Type instead">Aa</button>
       <button id="mic" class="mic" aria-label="Hold to talk"><span class="ring r1"></span><span class="ring r2"></span><span id="micLabel">Hold to talk</span></button>
-      <button id="photo" class="round secondary" title="Use a photo"><svg class="ico"><use href="#i-cam"/></svg></button>
-      <input id="file" type="file" accept="image/*" capture="environment" hidden>
+      <button id="look" class="round secondary" title="Look around"><svg class="ico"><use href="#i-cam"/></svg></button>
     </div>
+    <button id="justUse" class="secondary wide" hidden>Just show me how to use it</button>
 
     <div id="c-step" class="controls" hidden>
       <button id="type2" class="round secondary" title="Type instead">Aa</button>

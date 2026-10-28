@@ -31,9 +31,9 @@ let runStartedAt = 0;
 // ---------- screens ----------
 function screen(name) { document.body.dataset.screen = name; }
 function show(id, on) { $(id).hidden = !on; }
-function setTop(mode) {              // "idle" | "listen" | "think" | "step" | "need" | null
+function setTop(mode) {              // "idle" | "listen" | "think" | "step" | "need" | "survey" | null
   show("top", !!mode);
-  for (const m of ["t-idle", "t-listen", "t-think", "t-step", "t-need"]) show(m, false);
+  for (const m of ["t-idle", "t-listen", "t-think", "t-step", "t-need", "t-survey"]) show(m, false);
   if (mode) show("t-" + mode, true);
   show("bar", mode === "think");
   thinking(mode === "think");
@@ -46,8 +46,10 @@ function setBottom(mode) {           // "listen" | "step" | "need" | null
   $("nextLabel").textContent = mode === "need" ? "Check again" : "Done, check it";
   show("confirm", mode === "need");
   show("confirmNote", mode === "need");
+  show("justUse", false);
   if (mode !== "listen") { show("heard", false); }
 }
+const GENERAL = /^\s*(what('s| is| do you see| can you see| are these| is here| is this| is that| do we have)|which one|look around|what('s| is) (here|around|in front)|show me (what|everything)|what do you see)\b/i;
 
 // ---------- access key ----------
 function getKey() {
@@ -122,30 +124,19 @@ function displayedRect() {
   const s = Math.min(W / sw, H / sh);
   return { x: (W - sw * s) / 2, y: (H - sh * s) / 2, w: sw * s, h: sh * s };
 }
-function drawOutline(opts = {}) {
-  const dpr = window.devicePixelRatio || 1;
-  overlay.width = overlay.clientWidth * dpr; overlay.height = overlay.clientHeight * dpr;
-  const ctx = overlay.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
-  const o = run && run.outline; if (!o || !run.frame_size || !(o.box || o.bounds)) return;
-  const need = run.status === "needs_input";
-  const [fw] = run.frame_size;
-  const r = displayedRect();
-  const k = r.w / fw;
-  const stroke = opts.flash ? "#FFFFFF" : need ? "#8A9099" : ACCENT;
-  const fill = need ? "rgba(138,144,153,0.10)" : "rgba(79,227,255,0.14)";
+// Draw one outline (mask or box) with its label pill. r = displayed picture rect, k = frame px -> screen px.
+function drawOne(ctx, o, r, k, s) {
   ctx.save();
   ctx.translate(r.x, r.y); ctx.scale(k, k);
-  ctx.lineWidth = 3 / k; ctx.strokeStyle = stroke; ctx.fillStyle = fill;
-  if (need) ctx.setLineDash([8 / k, 6 / k]);
+  ctx.lineWidth = (s.width || 3) / k; ctx.strokeStyle = s.stroke; ctx.fillStyle = s.fill;
+  if (s.dashed) ctx.setLineDash([8 / k, 6 / k]);
   if (o.kind === "mask" && o.svg_path) {
     const [bl, bt, br, bb] = o.bounds;
     ctx.save();
     ctx.translate(bl, bt); ctx.scale((br - bl) / o.mask_w, (bb - bt) / o.mask_h);
     const p = new Path2D(o.svg_path);
     ctx.fill(p);
-    ctx.lineWidth = 3 / k / ((br - bl) / o.mask_w);
+    ctx.lineWidth = (s.width || 3) / k / ((br - bl) / o.mask_w);
     ctx.stroke(p);
     ctx.restore();
   } else if (o.box) {
@@ -154,23 +145,123 @@ function drawOutline(opts = {}) {
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
   }
   ctx.restore();
+  if (!s.label) return;
   const [bx, by] = o.box || o.bounds;
-  const label = (run.part_name || "") + (need ? " · too far to read" : "");
-  if (label.trim()) {
-    const sx = r.x + bx * k, sy = r.y + by * k;
-    ctx.font = "600 14px 'Instrument Sans', system-ui, sans-serif";
-    const tw = ctx.measureText(label).width, ph = 28, pw = tw + 22;
-    const px = Math.min(Math.max(6, sx), overlay.clientWidth - pw - 6);
-    const py = Math.max(6, sy - ph - 8);
-    ctx.fillStyle = "rgba(6,9,13,0.88)";
-    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 14); ctx.fill();
-    ctx.strokeStyle = need ? "#8A9099" : ACCENT; ctx.lineWidth = 1.5; ctx.setLineDash([]); ctx.stroke();
-    ctx.fillStyle = need ? "#A8ADB5" : "#EAF7FA"; ctx.textBaseline = "middle";
-    ctx.fillText(label, px + 11, py + ph / 2);
-  }
+  const sx = r.x + bx * k, sy = r.y + by * k;
+  ctx.font = "600 14px 'Instrument Sans', system-ui, sans-serif";
+  const tw = ctx.measureText(s.label).width, ph = 28, pw = tw + 22;
+  const px = Math.min(Math.max(6, sx), overlay.clientWidth - pw - 6);
+  const py = Math.max(6, sy - ph - 8);
+  ctx.fillStyle = s.pillFill || "rgba(6,9,13,0.88)";
+  ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 14); ctx.fill();
+  ctx.strokeStyle = s.stroke; ctx.lineWidth = 1.5; ctx.setLineDash([]); ctx.stroke();
+  ctx.fillStyle = s.text || "#EAF7FA"; ctx.textBaseline = "middle";
+  ctx.fillText(s.label, px + 11, py + ph / 2);
 }
+function clearOverlay() {
+  const dpr = window.devicePixelRatio || 1;
+  overlay.width = overlay.clientWidth * dpr; overlay.height = overlay.clientHeight * dpr;
+  const ctx = overlay.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
+  return ctx;
+}
+function drawOutline(opts = {}) {
+  const ctx = clearOverlay();
+  if (survey) { drawSurvey(ctx); return; }
+  const o = run && run.outline; if (!o || !run.frame_size || !(o.box || o.bounds)) return;
+  const need = run.status === "needs_input";
+  const r = displayedRect(), k = r.w / run.frame_size[0];
+  drawOne(ctx, o, r, k, {
+    stroke: opts.flash ? "#FFFFFF" : need ? "#8A9099" : ACCENT,
+    fill: need ? "rgba(138,144,153,0.10)" : "rgba(79,227,255,0.14)", dashed: need,
+    label: (run.part_name || "") + (need ? " · too far to read" : ""), text: need ? "#A8ADB5" : "#EAF7FA",
+  });
+}
+
+// ---------- look around (survey) ----------
+let survey = null;      // {objects:[{name, box, outline}], frame_size, frame_id, chosen}
+function drawSurvey(ctx) {
+  const r = displayedRect(), k = r.w / survey.frame_size[0];
+  survey.objects.forEach((obj, i) => {
+    const chosen = survey.chosen === i, dimmed = survey.chosen != null && !chosen;
+    drawOne(ctx, obj.outline || { kind: "box", box: obj.box }, r, k, {
+      stroke: dimmed ? "rgba(79,227,255,0.35)" : chosen ? "#FFFFFF" : ACCENT, width: chosen ? 4 : 3,
+      fill: dimmed ? "rgba(79,227,255,0.05)" : chosen ? "rgba(255,255,255,0.18)" : "rgba(79,227,255,0.14)",
+      label: obj.name, text: dimmed ? "#8A9099" : "#EAF7FA", pillFill: chosen ? "rgba(79,227,255,0.25)" : undefined,
+    });
+  });
+}
+function surveyHit(clientX, clientY) {
+  if (!survey) return -1;
+  const rect = overlay.getBoundingClientRect();
+  const r = displayedRect(), k = r.w / survey.frame_size[0];
+  const fx = (clientX - rect.left - r.x) / k, fy = (clientY - rect.top - r.y) / k;
+  let best = -1, bestArea = Infinity;
+  survey.objects.forEach((o, i) => {
+    const [x1, y1, x2, y2] = o.box;
+    const area = (x2 - x1) * (y2 - y1);
+    if (fx >= x1 - 12 && fx <= x2 + 12 && fy >= y1 - 12 && fy <= y2 + 12 && area < bestArea) { best = i; bestArea = area; }
+  });
+  return best;
+}
+overlay.addEventListener("pointerdown", (e) => { if (!survey) return; const i = surveyHit(e.clientX, e.clientY); if (i >= 0) chooseObject(i); });
+
+async function lookAround() {
+  if (busy) return;
+  busy = true; run = null; survey = null; prevStep = -1;
+  for (const k in timing) delete timing[k]; footer();
+  screen("live"); show("s-done", false); setTop("think"); setBottom("listen"); show("heard", false);
+  const t0 = performance.now();
+  try {
+    const form = new FormData();
+    let up = null; try { up = pendingFrame ? await pendingFrame : null; } catch (e) { up = null; }
+    pendingFrame = null;
+    if (up && up.frame_id) form.append("frame_id", up.frame_id);
+    else { const f = await captureFrame(); timing.frame = `${f.w}x${f.h} ${Math.round(f.blob.size / 1024)} KB`; form.append("frame", f.blob, "frame.jpg"); }
+    const s = await api("/survey", form, "look");
+    timing.cost = `$${(s.usd || 0).toFixed(3)}`; footer();
+    survey = { objects: s.objects || [], frame_size: s.frame_size, frame_id: s.frame_id, chosen: null };
+    overlay.style.pointerEvents = survey.objects.length ? "auto" : "none";
+    $("surveyCount").textContent = survey.objects.length ? `Looking around · ${survey.objects.length} thing${survey.objects.length === 1 ? "" : "s"} in view` : "Looking around";
+    $("surveyHead").textContent = s.prompt;
+    speak(survey.objects.length ? `${s.prompt} ${survey.objects.map((o) => o.name).join(", ")}.` : s.prompt);
+    setTop("survey"); setBottom("listen"); drawOutline();
+  } catch (e) { fail(e.message); }
+  busy = false;
+}
+function chooseObject(i, followUp) {
+  if (!survey || !survey.objects[i]) return;
+  survey.chosen = i;
+  const name = survey.objects[i].name;
+  drawOutline();
+  if (followUp) { startRun(followUp, { name, box: survey.objects[i].box }); return; }
+  $("surveyCount").textContent = name;
+  $("surveyHead").textContent = "What do you need help with?";
+  speak(`${name}. What do you need help with?`);
+  setTop("survey"); setBottom("listen"); show("justUse", true);
+}
+// A spoken or typed answer while looking around: an object name picks it; the rest of the sentence is the question.
+function surveyAnswer(text) {
+  if (!survey) return false;
+  const t = text.toLowerCase();
+  let pick = survey.chosen;
+  if (pick == null) {
+    survey.objects.forEach((o, i) => {
+      const words = o.name.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      if (pick == null && words.some((w) => t.includes(w))) pick = i;
+    });
+  }
+  if (pick == null) { $("surveyHead").textContent = "Tap the one you mean, or say its name."; speak("Tap the one you mean, or say its name."); return true; }
+  const isQuestion = /\b(how|what|why|where|which|can|do|does|should|turn|open|start|reset|fix|set)\b/i.test(text) && text.trim().split(/\s+/).length >= 3;
+  chooseObject(pick, isQuestion ? text : null);
+  return true;
+}
+$("look").addEventListener("click", () => { uploadFrameEarly().catch(() => {}); lookAround(); });
+$("justUse").addEventListener("click", () => { if (survey && survey.chosen != null) chooseObject(survey.chosen, `how do I use the ${survey.objects[survey.chosen].name}?`); });
 window.addEventListener("resize", () => drawOutline());
 cam.addEventListener("loadedmetadata", () => drawOutline());
+still.addEventListener("load", () => drawOutline());   // outlines scale by the picture's size, so redraw once it is known
 
 // ---------- server ----------
 const timing = {};
@@ -278,18 +369,28 @@ function render(r, opts = {}) {
 }
 
 // ---------- actions ----------
-async function startRun(question) {
+async function startRun(question, focus) {
   if (busy || !question) return;
+  if (!focus && GENERAL.test(question)) { $("heard").textContent = `“${question}”`; show("heard", true); return lookAround(); }
   busy = true; runStartedAt = performance.now(); prevStep = -1;
   setTop("think"); setBottom("listen"); $("heard").textContent = `“${question}”`; show("heard", true);
   const t0 = performance.now();
   try {
     const form = new FormData(); form.append("question", question);
-    let up = null; try { up = pendingFrame ? await pendingFrame : null; } catch (e) { up = null; }
-    pendingFrame = null;
-    if (up && up.frame_id) form.append("frame_id", up.frame_id);
-    else { const f = await captureFrame(); form.append("frame", f.blob, "frame.jpg"); }
+    if (focus) {
+      form.append("focus_name", focus.name);
+      if (focus.box) form.append("focus_box", focus.box.join(","));
+      if (survey && survey.frame_id) form.append("frame_id", survey.frame_id);   // same frame the user chose from
+    }
+    if (!form.has("frame_id")) {
+      let up = null; try { up = pendingFrame ? await pendingFrame : null; } catch (e) { up = null; }
+      pendingFrame = null;
+      if (up && up.frame_id) form.append("frame_id", up.frame_id);
+      else { const f = await captureFrame(); form.append("frame", f.blob, "frame.jpg"); }
+    }
+    survey = null; overlay.style.pointerEvents = "none";
     const r = await api("/runs", form, "identify");
+    if (r.status === "survey_needed") { busy = false; return lookAround(); }
     timing["first words"] = `${((performance.now() - t0) / 1000).toFixed(1)}s`; footer();
     render(r);
     if (r.status === "guiding" && r.id) {
@@ -316,7 +417,7 @@ async function confirmHuman() {
 }
 function fail(msg) { $("warnText").textContent = ""; $("warn").classList.add("empty"); $("stepLine").textContent = msg; $("feedback").textContent = ""; $("segments").innerHTML = ""; setTop("step"); setBottom("listen"); }
 function askAgain() {
-  run = null; prevStep = -1; speechSynthesis.cancel();
+  run = null; prevStep = -1; survey = null; overlay.style.pointerEvents = "none"; speechSynthesis.cancel();
   for (const k in timing) delete timing[k]; footer(); $("run").textContent = "";
   show("s-done", false); screen("live"); drawOutline();
   setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Point at the machine, then hold the mic and ask.";
@@ -351,15 +452,14 @@ async function startRecording() {
         const t = await api("/transcribe", form, "transcribe");
         busy = false;
         if (!t.text) { setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "I didn't catch that. Try again."; return; }
+        if (survey && surveyAnswer(t.text)) return;
         await startRun(t.text);
       } catch (e) { busy = false; fail(e.message); }
     };
     recorder.start();
     mic.classList.add("rec"); micLabel.textContent = "Listening";
-    setTop("listen"); show("heard", false);
     speechSynthesis.cancel();
-    for (const k in timing) delete timing[k]; footer();
-    uploadFrameEarly().catch(() => {});
+    if (!survey) { setTop("listen"); show("heard", false); for (const k in timing) delete timing[k]; footer(); uploadFrameEarly().catch(() => {}); }
   } catch (e) {
     setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Microphone not available. Type your question instead.";
     show("typed", true);
@@ -374,7 +474,12 @@ mic.addEventListener("contextmenu", (e) => e.preventDefault());
 function toggleTyped() { const t = $("typed"); t.hidden = !t.hidden; if (!t.hidden) $("question").focus(); }
 $("type").addEventListener("click", toggleTyped);
 $("type2").addEventListener("click", toggleTyped);
-$("ask").addEventListener("click", () => { const q = $("question").value.trim(); if (q) { for (const k in timing) delete timing[k]; uploadFrameEarly().catch(() => {}); show("typed", false); startRun(q); } });
+$("ask").addEventListener("click", () => {
+  const q = $("question").value.trim(); if (!q) return;
+  show("typed", false);
+  if (survey && surveyAnswer(q)) return;
+  for (const k in timing) delete timing[k]; uploadFrameEarly().catch(() => {}); startRun(q);
+});
 $("question").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ask").click(); });
 
 // ---------- start ----------
@@ -402,6 +507,13 @@ function demo(state) {
   if (state === "step") { run = { ...DEMO, status: "guiding", current_step: 0 }; prevStep = 0; renderStep(run, false); drawOutline(); $("run").textContent = "run demo · $0.031"; }
   if (state === "needs_input") { run = { ...DEMO, status: "needs_input", current_step: 1, part_name: "switch", matched_label: "Register", display: { ...DEMO.display, step: "I can't see it clearly. Hold the camera on the switch and tap Done again, or tap 'I did it' to continue." } }; prevStep = 1; renderNeed(run); drawOutline(); }
   if (state === "done") { run = { ...DEMO, status: "done", current_step: 4 }; runStartedAt = performance.now() - 74000; renderDone(run); }
+  if (state === "survey") {
+    survey = { frame_size: [576, 768], frame_id: "demo", chosen: null, objects: [
+      { name: "breaker panel", box: [60, 40, 500, 740] }, { name: "main breaker", box: [250, 60, 420, 150] }, { name: "register breaker", box: [255, 300, 340, 350] }] };
+    overlay.style.pointerEvents = "auto";
+    $("surveyCount").textContent = "Looking around · 3 things in view"; $("surveyHead").textContent = "Which one do you need help with?";
+    setTop("survey"); setBottom("listen"); drawOutline();
+  }
 }
 
 // ---------- boot ----------

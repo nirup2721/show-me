@@ -32,7 +32,9 @@ IDENTIFY_SCHEMA = {
 }
 
 IDENTIFY_PROMPT = (
-    "This is a photo of equipment in a small store. The user asked: \"{question}\"\n"
+    "This is a photo of equipment in a small store. The user asked: \"{question}\"\n{focus}"
+    "If the question is general and names no task (what is here, what can you see, which one), do not invent a task: "
+    "return an empty steps list, name the object, and leave safety_warning and prep empty.\n"
     "Name the object and the ONE part the user must touch first; give that part's bounding box on a 0-1000 grid "
     "(origin top-left, x left-to-right, y top-to-bottom), tight around the part, localized precisely. Report the exact "
     "label text you read on or beside it (empty if none) and whether that label names what the user asked about. "
@@ -79,6 +81,43 @@ VERIFY_PROMPT = (
     "handle to its neighbours and to the printed ON/OFF marks, and if you cannot clearly see which side it sits on, answer "
     "cannot_tell rather than pass. Nobody's word counts as evidence; only the photo. "
     "First describe what you see of the named thing in one sentence, then give the verdict."
+)
+
+SURVEY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scene": {"type": "string", "description": "Where this seems to be, in at most 6 words, e.g. 'convenience store counter'."},
+        "objects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "2-3 word name a person would say, e.g. 'coffee machine', 'breaker panel'."},
+                    "bbox": {"type": "object",
+                             "properties": {"x_min": {"type": "integer"}, "y_min": {"type": "integer"},
+                                            "x_max": {"type": "integer"}, "y_max": {"type": "integer"}},
+                             "required": ["x_min", "y_min", "x_max", "y_max"], "additionalProperties": False},
+                },
+                "required": ["name", "bbox"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["scene", "objects"],
+    "additionalProperties": False,
+}
+
+SURVEY_PROMPT = (
+    "Look around this photo. List every recognizable object, machine, appliance, fixture or control a person might "
+    "need help using, at most {max_objects}, biggest or most useful first. For each give a 2-3 word name and a tight "
+    "bounding box on a 0-1000 grid (origin top-left). Do NOT include people, hands, walls, floors or decoration. "
+    "Do not describe steps or tasks; this is only a survey of what is in view."
+)
+
+# Questions with no task in them. The page and the server both treat these as "look around", never as a task.
+GENERAL_QUESTION = (
+    r"^\s*(what('s| is| do you see| can you see| are these| is here| is this| is that| do we have)|which one|look around|"
+    r"what('s| is) (here|around|in front)|show me (what|everything)|what do you see)\b"
 )
 
 # Words the voice model would otherwise mishear in a noisy store. Hints only.

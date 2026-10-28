@@ -34,8 +34,15 @@ def _box_px(bbox: dict, w: int, h: int) -> list[int]:
     return [c(bbox["x_min"]) * w // 1000, c(bbox["y_min"]) * h // 1000, c(bbox["x_max"]) * w // 1000, c(bbox["y_max"]) * h // 1000]
 
 
-def run(run_record: dict, frame: str, width: int, height: int) -> dict:
-    prompt = prompts.IDENTIFY_PROMPT.format(question=run_record["question"], max_steps=config.MAX_STEPS)
+def run(run_record: dict, frame: str, width: int, height: int, focus: dict | None = None) -> dict:
+    """focus = {"name", "box"} when the user picked an object in look-around mode: identify works on that object only."""
+    focus_line = ""
+    if focus and focus.get("name"):
+        b = focus.get("box") or []
+        where = f" inside the box ({b[0]},{b[1]})-({b[2]},{b[3]}) in pixels of this {width}x{height} photo" if len(b) == 4 else ""
+        focus_line = f"The user pointed at the {focus['name']}{where}. Answer about that object only; ignore everything else in the photo.\n"
+        run_record["focus"] = focus
+    prompt = prompts.IDENTIFY_PROMPT.format(question=run_record["question"], max_steps=config.MAX_STEPS, focus=focus_line)
     have_baseten = config.has_backend("baseten")
     pool = ThreadPoolExecutor(max_workers=3)
     t0 = time.time()

@@ -28,6 +28,22 @@ def put(raw: bytes) -> dict:
     return {"frame_id": fid, "w": w, "h": h, "bytes_in": len(raw)}
 
 
+def put_data_url(data_url: str, w: int, h: int) -> str:
+    """Store an already-downsized frame (e.g. one that arrived with /survey) and return its id."""
+    fid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+    p = _dir() / f"{fid}.json"
+    p.write_text(json.dumps({"data_url": data_url, "w": w, "h": h, "ts": time.time()}), encoding="utf-8")
+    store.mark_dirty(p)
+    return fid
+
+
+def save_survey(fid: str, result: dict):
+    """Keep the look-around result beside its frame, for the run log and the console."""
+    p = _dir() / f"survey-{fid}.json"
+    p.write_text(json.dumps({k: v for k, v in result.items() if k != "frame_size"} | {"frame_size": result.get("frame_size")}), encoding="utf-8")
+    store.mark_dirty(p)
+
+
 def get(fid: str) -> tuple[str, int, int] | None:
     if not fid or "/" in fid or ".." in fid:
         return None
