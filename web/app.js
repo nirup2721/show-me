@@ -6,31 +6,14 @@
 
 const BACKEND = "https://nirup2721--show-me-web.us-east.modal.run";
 const FRAME_LONG_SIDE = 768;
-const ACCENT_AMBER = "#FFB020", ACCENT_HUD = "#4FE3FF";
-let ACCENT = ACCENT_AMBER;
+const ACCENT = "#4FE3FF";
 
-// ---------- theme (#theme=hud | amber; remembered) ----------
-function initTheme() {
-  const m = location.hash.match(/theme=(hud|amber)/);
-  if (m) localStorage.setItem("showme_theme", m[1]);
-  const t = localStorage.getItem("showme_theme") || "amber";
-  document.documentElement.dataset.theme = t;
-  ACCENT = t === "hud" ? ACCENT_HUD : ACCENT_AMBER;
-  if (t === "hud") {
-    for (const side of ["left", "right"]) {
-      const r = document.querySelector(`#hud .ruler.${side}`);
-      for (let i = 0; i <= 10; i++) { const s = document.createElement("span"); s.style.top = `${i * 10}%`; s.textContent = String(i * 10).padStart(2, "0"); r.appendChild(s); }
-    }
-  }
-}
-const isHud = () => document.documentElement.dataset.theme === "hud";
+// ---------- thinking state: sweep, reticle, readout that fills from live timings ----------
 const secs = (v) => { const m = /^([\d.]+)s/.exec(v || ""); return m ? `${(+m[1]).toFixed(1)}s` : "wait"; };
 function updateReadout() {
-  if (!isHud()) return;
   $("readout").textContent = `IDENTIFY ·· ${secs(timing.identify)}\nOUTLINE  ·· ${secs(timing.outline)}\nPLAN     ·· ${secs(timing["first words"])}`;
 }
 function thinking(on) {
-  if (!isHud()) return;
   const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   show("sweep", on && motion); show("reticle", on && motion); show("readout", on);
   if (on) updateReadout();
@@ -150,12 +133,10 @@ function drawOutline(opts = {}) {
   const [fw] = run.frame_size;
   const r = displayedRect();
   const k = r.w / fw;
-  const hud = isHud();
   const stroke = opts.flash ? "#FFFFFF" : need ? "#8A9099" : ACCENT;
-  const fill = need ? "rgba(138,144,153,0.10)" : hud ? "rgba(79,227,255,0.14)" : "rgba(255,176,32,0.14)";
+  const fill = need ? "rgba(138,144,153,0.10)" : "rgba(79,227,255,0.14)";
   ctx.save();
   ctx.translate(r.x, r.y); ctx.scale(k, k);
-  if (hud && !need) { ctx.shadowColor = ACCENT_HUD; ctx.shadowBlur = 14; }
   ctx.lineWidth = 3 / k; ctx.strokeStyle = stroke; ctx.fillStyle = fill;
   if (need) ctx.setLineDash([8 / k, 6 / k]);
   if (o.kind === "mask" && o.svg_path) {
@@ -173,31 +154,18 @@ function drawOutline(opts = {}) {
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
   }
   ctx.restore();
-  const [bx, by, bx2, by2] = o.box || o.bounds;
-  if (hud && !need) {
-    // bracket corners around the bounding box and a crosshair at its centre, in screen pixels
-    const x1 = r.x + bx * k, y1 = r.y + by * k, x2 = r.x + bx2 * k, y2 = r.y + by2 * k, L = 14, g = 6;
-    ctx.save(); ctx.strokeStyle = ACCENT_HUD; ctx.lineWidth = 2; ctx.setLineDash([]);
-    for (const [cx, cy, dx, dy] of [[x1 - g, y1 - g, 1, 1], [x2 + g, y1 - g, -1, 1], [x1 - g, y2 + g, 1, -1], [x2 + g, y2 + g, -1, -1]]) {
-      ctx.beginPath(); ctx.moveTo(cx, cy + dy * L); ctx.lineTo(cx, cy); ctx.lineTo(cx + dx * L, cy); ctx.stroke();
-    }
-    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-    ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(mx - 9, my); ctx.lineTo(mx + 9, my); ctx.moveTo(mx, my - 9); ctx.lineTo(mx, my + 9); ctx.stroke();
-    ctx.restore();
-  }
-  let label = (run.part_name || "") + (need ? " · too far to read" : "");
-  if (hud && label) label = label.toUpperCase() + (o.confidence != null && !need ? ` · ${o.confidence.toFixed(2)}` : "");
+  const [bx, by] = o.box || o.bounds;
+  const label = (run.part_name || "") + (need ? " · too far to read" : "");
   if (label.trim()) {
     const sx = r.x + bx * k, sy = r.y + by * k;
-    ctx.font = hud ? "500 11px 'JetBrains Mono', ui-monospace, monospace" : "600 14px 'Instrument Sans', system-ui, sans-serif";
-    if (hud) ctx.letterSpacing = "0.08em";
+    ctx.font = "600 14px 'Instrument Sans', system-ui, sans-serif";
     const tw = ctx.measureText(label).width, ph = 28, pw = tw + 22;
     const px = Math.min(Math.max(6, sx), overlay.clientWidth - pw - 6);
     const py = Math.max(6, sy - ph - 8);
-    ctx.fillStyle = "rgba(12,14,18,0.88)";
+    ctx.fillStyle = "rgba(6,9,13,0.88)";
     ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 14); ctx.fill();
     ctx.strokeStyle = need ? "#8A9099" : ACCENT; ctx.lineWidth = 1.5; ctx.setLineDash([]); ctx.stroke();
-    ctx.fillStyle = need ? "#A8ADB5" : "#F4F1EA"; ctx.textBaseline = "middle";
+    ctx.fillStyle = need ? "#A8ADB5" : "#EAF7FA"; ctx.textBaseline = "middle";
     ctx.fillText(label, px + 11, py + ph / 2);
   }
 }
@@ -207,15 +175,9 @@ cam.addEventListener("loadedmetadata", () => drawOutline());
 // ---------- server ----------
 const timing = {};
 function footer() {
-  if (isHud()) {
-    const cost = run && run.cost_usd ? ` · $${run.cost_usd.toFixed(3)}` : "";
-    const bits = [["ID", timing.identify], ["SAM", timing.outline], ["VOX", timing.transcribe]].filter(([, v]) => v).map(([k, v]) => `${k} ${secs(v)}`);
-    $("run").textContent = ""; $("cost").textContent = bits.join(" · ") + cost;
-    updateReadout();
-    return;
-  }
   const parts = Object.entries(timing).map(([k, v]) => `${k} ${v}`);
   $("cost").textContent = (parts.length && $("run").textContent ? " · " : "") + parts.join(" · ");
+  if (!$("readout").hidden) updateReadout();
 }
 function mark(name, t0, r) {
   const ms = Math.round(performance.now() - t0);
@@ -252,9 +214,6 @@ function renderStep(r, animate) {
   const n = r.current_step, total = r.steps.length, step = r.steps[n];
   $("warnText").textContent = d.warning || "";
   $("warn").classList.toggle("empty", !d.warning);
-  $("obj").textContent = isHud()
-    ? `OBJ ${r.object_name || "?"} / STEP ${String(n + 1).padStart(2, "0")}/${String(total).padStart(2, "0")}`
-    : [r.object_name, r.part_name].filter(Boolean).join(" · ");
   $("stepLine").textContent = step ? `Step ${n + 1}. ${step.instruction}` : d.step || "";
   // "Not yet. <reason> <instruction>" from the verifier -> feedback line under the step
   let fb = "";
@@ -262,17 +221,23 @@ function renderStep(r, animate) {
   $("feedback").textContent = fb;
   const seg = $("segments"); seg.innerHTML = "";
   for (let i = 0; i < total; i++) { const s = document.createElement("i"); if (i < n) s.className = "on"; else if (i === n) s.className = "cur"; seg.appendChild(s); }
-  $("stepCount").textContent = `Step ${n + 1} of ${total}`;
   setTop("step"); setBottom("step");
   const el = $("t-step"); el.classList.remove("in"); if (animate) { void el.offsetWidth; el.classList.add("in"); }
 }
-function renderNeed(r) {
+// One sentence for the strip, built from the run; the server's longer message is what gets spoken.
+function needSentence(r) {
+  const part = r.part_name || "the part";
+  const label = r.matched_label || part;
   const d = r.display || {};
+  const el = $("needHead"); el.textContent = "";
+  const add = (t, cls) => { const s = document.createElement("span"); if (cls) s.className = cls; s.textContent = t; el.appendChild(s); };
+  if (/still can't confirm/i.test(d.step || "")) { add(`Still can't confirm the ${part}. Hold the camera on it and check again.`); return; }
+  add(`Can't see the ${part}. Move closer so `); add(label, "accent"); add(" fills the screen.");
+}
+function renderNeed(r) {
   const n = r.current_step, total = r.steps.length;
-  const [head, body] = firstSentence(d.step || r.message);
   $("needCount").textContent = `Step ${Math.min(n + 1, total)} of ${total} · waiting on you`;
-  $("needHead").textContent = head;
-  $("needBody").textContent = body;
+  needSentence(r);
   setTop("need"); setBottom("need");
 }
 function renderDone(r) {
@@ -300,6 +265,7 @@ function render(r, opts = {}) {
   const failed = run && r.status === "guiding" && r.current_step === prevStep && /^Not yet\./.test((r.display || {}).step || "");
   run = r; prevStep = r.current_step;
   $("run").textContent = r.id ? `run ${r.id}${r.cost_usd ? ` · $${r.cost_usd.toFixed(3)}` : ""}` : "";
+  footer();
   if (opts.quiet) { drawOutline(); return; }       // outline arrived after speech began
   speak(r.message);
   if (r.status === "done") { renderDone(r); drawOutline(); return; }
@@ -348,7 +314,7 @@ async function confirmHuman() {
   try { render(await api(`/runs/${run.id}/confirm`, new FormData())); } catch (e) { fail(e.message); }
   busy = false;
 }
-function fail(msg) { $("warnText").textContent = ""; $("warn").classList.add("empty"); $("obj").textContent = ""; $("stepLine").textContent = msg; $("feedback").textContent = ""; $("segments").innerHTML = ""; $("stepCount").textContent = ""; setTop("step"); setBottom("listen"); }
+function fail(msg) { $("warnText").textContent = ""; $("warn").classList.add("empty"); $("stepLine").textContent = msg; $("feedback").textContent = ""; $("segments").innerHTML = ""; setTop("step"); setBottom("listen"); }
 function askAgain() {
   run = null; prevStep = -1; speechSynthesis.cancel();
   for (const k in timing) delete timing[k]; footer(); $("run").textContent = "";
@@ -434,13 +400,12 @@ function demo(state) {
   if (state === "listening") { setTop("listen"); setBottom("listen"); mic.classList.add("rec"); micLabel.textContent = "Listening"; $("heard").textContent = "“the register has no pow”"; show("heard", true); }
   if (state === "thinking") { delete timing.outline; delete timing["first words"]; setTop("think"); setBottom("listen"); $("heard").textContent = "“the register has no power. What do I do?”"; show("heard", true); footer(); }
   if (state === "step") { run = { ...DEMO, status: "guiding", current_step: 0 }; prevStep = 0; renderStep(run, false); drawOutline(); $("run").textContent = "run demo · $0.031"; }
-  if (state === "needs_input") { run = { ...DEMO, status: "needs_input", current_step: 1, display: { ...DEMO.display, step: "I can't see the switch clearly. Move closer so the Register label fills the screen, then I'll check it again." } }; prevStep = 1; renderNeed(run); drawOutline(); }
+  if (state === "needs_input") { run = { ...DEMO, status: "needs_input", current_step: 1, part_name: "switch", matched_label: "Register", display: { ...DEMO.display, step: "I can't see it clearly. Hold the camera on the switch and tap Done again, or tap 'I did it' to continue." } }; prevStep = 1; renderNeed(run); drawOutline(); }
   if (state === "done") { run = { ...DEMO, status: "done", current_step: 4 }; runStartedAt = performance.now() - 74000; renderDone(run); }
 }
 
 // ---------- boot ----------
 (async () => {
-  initTheme();
   await loadDevKey();
   KEY = getKey();
   const m = location.hash.match(/demo=([a-z_]+)/);

@@ -32,11 +32,8 @@
   <video id="cam" autoplay playsinline muted></video>
   <img id="still" alt="" hidden>
   <canvas id="overlay"></canvas>
-  <!-- HUD skin layers (theme=hud only): scan lines, vignette, corner brackets, edge rulers, sweep, reticle -->
-  <div id="hud" aria-hidden="true">
-    <div class="scan"></div><div class="vignette"></div>
-    <div class="bracket tl"></div><div class="bracket tr"></div><div class="bracket bl"></div><div class="bracket br"></div>
-    <div class="ruler left"></div><div class="ruler right"></div>
+  <!-- thinking state: sweep line, dashed reticle, live readout -->
+  <div id="think" aria-hidden="true">
     <div id="sweep" class="sweep" hidden></div>
     <div id="reticle" class="reticle" hidden></div>
     <div id="readout" class="readout" hidden></div>
@@ -61,16 +58,13 @@
     <div id="t-think" class="row" hidden><span class="t-title">Thinking…</span></div>
     <div id="t-idle" class="row" hidden><span class="t-sub">Point at the machine, then hold the mic and ask.</span></div>
     <div id="t-step" hidden>
-      <div id="warn" class="warn"><svg class="ico"><use href="#i-warn"/></svg><span id="warnText"></span></div>
-      <div id="obj" class="muted"></div>
-      <div id="stepLine" class="step"></div>
+      <div id="warn" class="line1 warn"><svg class="ico"><use href="#i-warn"/></svg><span id="warnText"></span></div>
+      <div class="line2"><div id="stepLine" class="step"></div><div id="segments" class="segments"></div></div>
       <div id="feedback" class="feedback"></div>
-      <div class="progress"><div id="segments" class="segments"></div><span id="stepCount" class="muted small"></span></div>
     </div>
     <div id="t-need" hidden>
-      <div id="needCount" class="muted small"></div>
-      <div id="needHead" class="step"></div>
-      <div id="needBody" class="body"></div>
+      <div class="line1 waiting"><span id="needCount"></span></div>
+      <div class="line2"><div id="needHead" class="step"></div></div>
     </div>
     <div id="bar" class="bar" hidden><i></i></div>
   </section>
