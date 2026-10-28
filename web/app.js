@@ -6,7 +6,35 @@
 
 const BACKEND = "https://nirup2721--show-me-web.us-east.modal.run";
 const FRAME_LONG_SIDE = 768;
-const ACCENT = "#FFB020";
+const ACCENT_AMBER = "#FFB020", ACCENT_HUD = "#4FE3FF";
+let ACCENT = ACCENT_AMBER;
+
+// ---------- theme (#theme=hud | amber; remembered) ----------
+function initTheme() {
+  const m = location.hash.match(/theme=(hud|amber)/);
+  if (m) localStorage.setItem("showme_theme", m[1]);
+  const t = localStorage.getItem("showme_theme") || "amber";
+  document.documentElement.dataset.theme = t;
+  ACCENT = t === "hud" ? ACCENT_HUD : ACCENT_AMBER;
+  if (t === "hud") {
+    for (const side of ["left", "right"]) {
+      const r = document.querySelector(`#hud .ruler.${side}`);
+      for (let i = 0; i <= 10; i++) { const s = document.createElement("span"); s.style.top = `${i * 10}%`; s.textContent = String(i * 10).padStart(2, "0"); r.appendChild(s); }
+    }
+  }
+}
+const isHud = () => document.documentElement.dataset.theme === "hud";
+const secs = (v) => { const m = /^([\d.]+)s/.exec(v || ""); return m ? `${(+m[1]).toFixed(1)}s` : "wait"; };
+function updateReadout() {
+  if (!isHud()) return;
+  $("readout").textContent = `IDENTIFY ·· ${secs(timing.identify)}\nOUTLINE  ·· ${secs(timing.outline)}\nPLAN     ·· ${secs(timing["first words"])}`;
+}
+function thinking(on) {
+  if (!isHud()) return;
+  const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  show("sweep", on && motion); show("reticle", on && motion); show("readout", on);
+  if (on) updateReadout();
+}
 
 const $ = (id) => document.getElementById(id);
 const cam = $("cam"), still = $("still"), overlay = $("overlay");
@@ -25,6 +53,7 @@ function setTop(mode) {              // "idle" | "listen" | "think" | "step" | "
   for (const m of ["t-idle", "t-listen", "t-think", "t-step", "t-need"]) show(m, false);
   if (mode) show("t-" + mode, true);
   show("bar", mode === "think");
+  thinking(mode === "think");
 }
 function setBottom(mode) {           // "listen" | "step" | "need" | null
   show("bottom", !!mode);
@@ -121,10 +150,12 @@ function drawOutline(opts = {}) {
   const [fw] = run.frame_size;
   const r = displayedRect();
   const k = r.w / fw;
+  const hud = isHud();
   const stroke = opts.flash ? "#FFFFFF" : need ? "#8A9099" : ACCENT;
-  const fill = need ? "rgba(138,144,153,0.10)" : "rgba(255,176,32,0.14)";
+  const fill = need ? "rgba(138,144,153,0.10)" : hud ? "rgba(79,227,255,0.14)" : "rgba(255,176,32,0.14)";
   ctx.save();
   ctx.translate(r.x, r.y); ctx.scale(k, k);
+  if (hud && !need) { ctx.shadowColor = ACCENT_HUD; ctx.shadowBlur = 14; }
   ctx.lineWidth = 3 / k; ctx.strokeStyle = stroke; ctx.fillStyle = fill;
   if (need) ctx.setLineDash([8 / k, 6 / k]);
   if (o.kind === "mask" && o.svg_path) {
@@ -142,11 +173,24 @@ function drawOutline(opts = {}) {
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
   }
   ctx.restore();
-  const [bx, by] = o.box || o.bounds;
-  const label = (run.part_name || "") + (need ? " · too far to read" : "");
+  const [bx, by, bx2, by2] = o.box || o.bounds;
+  if (hud && !need) {
+    // bracket corners around the bounding box and a crosshair at its centre, in screen pixels
+    const x1 = r.x + bx * k, y1 = r.y + by * k, x2 = r.x + bx2 * k, y2 = r.y + by2 * k, L = 14, g = 6;
+    ctx.save(); ctx.strokeStyle = ACCENT_HUD; ctx.lineWidth = 2; ctx.setLineDash([]);
+    for (const [cx, cy, dx, dy] of [[x1 - g, y1 - g, 1, 1], [x2 + g, y1 - g, -1, 1], [x1 - g, y2 + g, 1, -1], [x2 + g, y2 + g, -1, -1]]) {
+      ctx.beginPath(); ctx.moveTo(cx, cy + dy * L); ctx.lineTo(cx, cy); ctx.lineTo(cx + dx * L, cy); ctx.stroke();
+    }
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(mx - 9, my); ctx.lineTo(mx + 9, my); ctx.moveTo(mx, my - 9); ctx.lineTo(mx, my + 9); ctx.stroke();
+    ctx.restore();
+  }
+  let label = (run.part_name || "") + (need ? " · too far to read" : "");
+  if (hud && label) label = label.toUpperCase() + (o.confidence != null && !need ? ` · ${o.confidence.toFixed(2)}` : "");
   if (label.trim()) {
     const sx = r.x + bx * k, sy = r.y + by * k;
-    ctx.font = "600 14px 'Instrument Sans', system-ui, sans-serif";
+    ctx.font = hud ? "500 11px 'JetBrains Mono', ui-monospace, monospace" : "600 14px 'Instrument Sans', system-ui, sans-serif";
+    if (hud) ctx.letterSpacing = "0.08em";
     const tw = ctx.measureText(label).width, ph = 28, pw = tw + 22;
     const px = Math.min(Math.max(6, sx), overlay.clientWidth - pw - 6);
     const py = Math.max(6, sy - ph - 8);
@@ -163,6 +207,13 @@ cam.addEventListener("loadedmetadata", () => drawOutline());
 // ---------- server ----------
 const timing = {};
 function footer() {
+  if (isHud()) {
+    const cost = run && run.cost_usd ? ` · $${run.cost_usd.toFixed(3)}` : "";
+    const bits = [["ID", timing.identify], ["SAM", timing.outline], ["VOX", timing.transcribe]].filter(([, v]) => v).map(([k, v]) => `${k} ${secs(v)}`);
+    $("run").textContent = ""; $("cost").textContent = bits.join(" · ") + cost;
+    updateReadout();
+    return;
+  }
   const parts = Object.entries(timing).map(([k, v]) => `${k} ${v}`);
   $("cost").textContent = (parts.length && $("run").textContent ? " · " : "") + parts.join(" · ");
 }
@@ -201,7 +252,9 @@ function renderStep(r, animate) {
   const n = r.current_step, total = r.steps.length, step = r.steps[n];
   $("warnText").textContent = d.warning || "";
   $("warn").classList.toggle("empty", !d.warning);
-  $("obj").textContent = [r.object_name, r.part_name].filter(Boolean).join(" · ");
+  $("obj").textContent = isHud()
+    ? `OBJ ${r.object_name || "?"} / STEP ${String(n + 1).padStart(2, "0")}/${String(total).padStart(2, "0")}`
+    : [r.object_name, r.part_name].filter(Boolean).join(" · ");
   $("stepLine").textContent = step ? `Step ${n + 1}. ${step.instruction}` : d.step || "";
   // "Not yet. <reason> <instruction>" from the verifier -> feedback line under the step
   let fb = "";
@@ -372,14 +425,14 @@ const DEMO = {
   display: { warning: "Keep hands dry. Touch only the breaker handle.", object: "", step: "Step 1. Push the Register breaker handle down to OFF." },
   steps: [{ instruction: "Push the Register breaker handle down to OFF.", confirmed_by: "camera" }, { instruction: "Push the same handle firmly back to ON.", confirmed_by: "camera" },
           { instruction: "Check that the register screen is lit.", confirmed_by: "camera" }, { instruction: "Confirm the register responds.", confirmed_by: "you" }],
-  outline: { kind: "box", box: [255, 300, 340, 350] }, cost_usd: 0.031, id: "demo",
+  outline: { kind: "box", box: [255, 300, 340, 350], confidence: 0.94 }, cost_usd: 0.031, id: "demo",
 };
 function demo(state) {
   screen("live"); show("s-done", false);
   if (!loadDevImage()) { startCamera(); }
   timing.frame = "576x768 59 KB"; timing.transcribe = "2.1s"; timing.identify = "2.9s"; timing["first words"] = "5.0s"; timing.outline = "1.7s"; footer();
   if (state === "listening") { setTop("listen"); setBottom("listen"); mic.classList.add("rec"); micLabel.textContent = "Listening"; $("heard").textContent = "“the register has no pow”"; show("heard", true); }
-  if (state === "thinking") { setTop("think"); setBottom("listen"); $("heard").textContent = "“the register has no power. What do I do?”"; show("heard", true); }
+  if (state === "thinking") { delete timing.outline; delete timing["first words"]; setTop("think"); setBottom("listen"); $("heard").textContent = "“the register has no power. What do I do?”"; show("heard", true); footer(); }
   if (state === "step") { run = { ...DEMO, status: "guiding", current_step: 0 }; prevStep = 0; renderStep(run, false); drawOutline(); $("run").textContent = "run demo · $0.031"; }
   if (state === "needs_input") { run = { ...DEMO, status: "needs_input", current_step: 1, display: { ...DEMO.display, step: "I can't see the switch clearly. Move closer so the Register label fills the screen, then I'll check it again." } }; prevStep = 1; renderNeed(run); drawOutline(); }
   if (state === "done") { run = { ...DEMO, status: "done", current_step: 4 }; runStartedAt = performance.now() - 74000; renderDone(run); }
@@ -387,6 +440,7 @@ function demo(state) {
 
 // ---------- boot ----------
 (async () => {
+  initTheme();
   await loadDevKey();
   KEY = getKey();
   const m = location.hash.match(/demo=([a-z_]+)/);

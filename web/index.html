@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-screen="start">
@@ -32,6 +32,15 @@
   <video id="cam" autoplay playsinline muted></video>
   <img id="still" alt="" hidden>
   <canvas id="overlay"></canvas>
+  <!-- HUD skin layers (theme=hud only): scan lines, vignette, corner brackets, edge rulers, sweep, reticle -->
+  <div id="hud" aria-hidden="true">
+    <div class="scan"></div><div class="vignette"></div>
+    <div class="bracket tl"></div><div class="bracket tr"></div><div class="bracket bl"></div><div class="bracket br"></div>
+    <div class="ruler left"></div><div class="ruler right"></div>
+    <div id="sweep" class="sweep" hidden></div>
+    <div id="reticle" class="reticle" hidden></div>
+    <div id="readout" class="readout" hidden></div>
+  </div>
   <div id="scrim"></div>
 
   <!-- 1. Start -->
