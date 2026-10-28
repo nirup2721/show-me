@@ -9,7 +9,9 @@ import os
 
 from fastapi import Request
 
-VERSION = "0.1.2"  # bump on every deploy so /health shows which code is live
+from fastapi.middleware.cors import CORSMiddleware
+
+VERSION = "0.1.4"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -22,11 +24,24 @@ _OPEN_PATHS = {"/health", "/", "/docs", "/openapi.json"}
 async def _require_access_key(request: Request, call_next):
     expected = os.environ.get("SHOWME_ACCESS_KEY", "")
     path = request.url.path
-    if expected and path not in _OPEN_PATHS and not path.startswith("/static"):
+    if request.method != "OPTIONS" and expected and path not in _OPEN_PATHS and not path.startswith("/static"):
         given = request.headers.get("x-show-me-key") or request.query_params.get("key", "")
         if given != expected:
             return JSONResponse({"detail": "access key missing or wrong"}, status_code=401)
     return await call_next(request)
+
+
+# The phone page is hosted on Vercel at askshowme.com and calls this server from the browser.
+# Added AFTER the access-key middleware so CORS is the outermost layer: preflights are answered before the
+# key check, and 401s still carry CORS headers so the page can read them.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://askshowme.com", "https://www.askshowme.com"],
+    allow_origin_regex=r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.vercel\.app$|^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-Show-Me-Key", "Content-Type"],
+    max_age=600,
+)
 
 
 def _budget_guard():

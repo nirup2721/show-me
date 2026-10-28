@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0b0d">
+<title>Show Me</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="stage">
+    <video id="cam" autoplay playsinline muted></video>
+    <img id="still" alt="" hidden>
+    <canvas id="overlay"></canvas>
+
+    <div id="top">
+      <div id="status">Point the camera at the machine, then hold the mic and ask.</div>
+    </div>
+
+    <div id="bottom">
+      <div id="typed" hidden>
+        <input id="question" type="text" placeholder="Type your question" autocomplete="off">
+        <button id="ask" class="small">Ask</button>
+      </div>
+      <div id="controls">
+        <button id="type" class="round small" title="Type instead">Aa</button>
+        <button id="mic" class="round big" aria-label="Hold to talk">
+          <span id="micLabel">Hold to talk</span>
+        </button>
+        <button id="photo" class="round small" title="Use a photo">📷</button>
+        <input id="file" type="file" accept="image/*" capture="environment" hidden>
+      </div>
+      <div id="actions" hidden>
+        <button id="next" class="wide">Done, check it</button>
+        <button id="confirm" class="wide alt" hidden>I did it, continue</button>
+        <button id="restart" class="wide alt" hidden>Start over</button>
+      </div>
+      <div id="foot"><span id="run"></span> <span id="cost"></span></div>
+    </div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

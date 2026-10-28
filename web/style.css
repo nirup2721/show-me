@@ -1,0 +1,25 @@
+:root { color-scheme: dark; --bg: #0b0b0d; --fg: #f2f2f2; --dim: #a8a8ad; --accent: #2f7cf6; --ok: #35d07f; --warn: #ffb020; --bad: #ff5a5a; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; overscroll-behavior: none; }
+#stage { position: fixed; inset: 0; overflow: hidden; }
+#cam, #still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+#overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#top { position: absolute; top: 0; left: 0; right: 0; padding: max(12px, env(safe-area-inset-top)) 14px 10px; background: linear-gradient(rgba(0,0,0,.75), rgba(0,0,0,0)); }
+#status { font-size: 18px; line-height: 1.35; text-shadow: 0 1px 2px #000; min-height: 1.4em; }
+#status.ok { color: var(--ok); } #status.warn { color: var(--warn); } #status.bad { color: var(--bad); } #status.busy { color: var(--dim); }
+#bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 14px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.85) 40%); display: flex; flex-direction: column; gap: 10px; }
+#controls { display: flex; align-items: center; justify-content: center; gap: 18px; }
+button { border: 0; color: #fff; font-size: 17px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+button:disabled { opacity: .45; }
+.round { border-radius: 999px; background: #2a2a30; }
+.round.small { width: 52px; height: 52px; font-size: 18px; }
+.round.big { width: 112px; height: 112px; background: var(--accent); font-size: 15px; box-shadow: 0 0 0 0 rgba(47,124,246,.6); user-select: none; -webkit-user-select: none; }
+.round.big.rec { background: var(--bad); animation: pulse 1s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,90,90,.6);} 100% { box-shadow: 0 0 0 22px rgba(255,90,90,0);} }
+.wide { width: 100%; padding: 16px; border-radius: 14px; background: var(--accent); font-size: 19px; }
+.wide.alt { background: #2a2a30; }
+#actions { display: flex; flex-direction: column; gap: 8px; }
+#typed { display: flex; gap: 8px; }
+#typed input { flex: 1; font-size: 17px; padding: 12px; border-radius: 12px; border: 1px solid #333; background: #141418; color: var(--fg); }
+#foot { font-size: 12px; color: var(--dim); text-align: center; min-height: 1em; }
