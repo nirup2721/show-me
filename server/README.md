@@ -37,10 +37,20 @@ step (or three fails in a row) and `failed` on a model or budget error. Each con
 | GET | `/runs` | | recent runs with human-confirmed counts |
 | GET | `/costs` | | spend by backend |
 
+## Access key
+
+When `SHOWME_ACCESS_KEY` is set (it is, in the Modal secret), every endpoint except `/health` and the page itself
+needs the header `X-Show-Me-Key: <key>` (or `?key=`). The phone page receives the key once from the owner and keeps
+it in local storage; it is never in the page source or the repo.
+
 ## Deploy
 
 ```
 python -m modal setup                      # once, logs in
-modal secret create show-me-keys META_API_KEY=... BASETEN_API_KEY=...
-modal deploy server/app.py                 # prints the public URL
+modal secret create show-me-keys META_API_KEY=... BASETEN_API_KEY=... SHOWME_ACCESS_KEY=...
+PYTHONUTF8=1 python -m modal deploy server/app.py      # prints the public URL (UTF-8 flag avoids a Windows console error)
+SHOWME_DOMAIN=1 PYTHONUTF8=1 python -m modal deploy server/app.py   # once askshowme.com is registered in Modal + DNS set
 ```
+
+Public address: **https://askshowme.com** (custom domain on Modal; DNS pending as of Oct 28). One container is kept
+warm (`min_containers=1`) so the first request of a demo is not a cold start.
