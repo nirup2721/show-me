@@ -1,0 +1,60 @@
+"""Uploaded frames, kept briefly on disk so the phone can upload the picture while the voice is still being transcribed.
+
+The phone posts the frame to /frames the moment the mic is released, gets a frame_id back, and later starts the run
+with that id instead of re-uploading. Frames older than FRAME_TTL_S are swept on every write.
+"""
+import json
+import secrets
+import time
+from pathlib import Path
+
+from . import config, models, store
+
+
+def _dir() -> Path:
+    d = config.DATA_DIR / "frames"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def put(raw: bytes) -> dict:
+    """Downsize once, store the data URL, return {frame_id, w, h, bytes_in}."""
+    data_url, w, h = models.frame_from_bytes(raw)
+    fid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+    p = _dir() / f"{fid}.json"
+    p.write_text(json.dumps({"data_url": data_url, "w": w, "h": h, "bytes_in": len(raw), "ts": time.time()}), encoding="utf-8")
+    store.mark_dirty(p)
+    sweep()
+    return {"frame_id": fid, "w": w, "h": h, "bytes_in": len(raw)}
+
+
+def get(fid: str) -> tuple[str, int, int] | None:
+    if not fid or "/" in fid or ".." in fid:
+        return None
+    p = _dir() / f"{fid}.json"
+    if not p.exists():
+        return None
+    d = json.loads(p.read_text(encoding="utf-8"))
+    return d["data_url"], d["w"], d["h"]
+
+
+def keep_for_run(run_id: str, data_url: str, w: int, h: int):
+    """The frame a run started from, so /outline can segment it without a second upload."""
+    p = _dir() / f"run-{run_id}.json"
+    p.write_text(json.dumps({"data_url": data_url, "w": w, "h": h, "ts": time.time()}), encoding="utf-8")
+    store.mark_dirty(p)
+
+
+def for_run(run_id: str) -> tuple[str, int, int] | None:
+    return get(f"run-{run_id}")
+
+
+def sweep():
+    cutoff = time.time() - config.FRAME_TTL_S
+    for p in _dir().glob("*.json"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+                store.mark_dirty(p)
+        except OSError:
+            pass

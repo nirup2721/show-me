@@ -122,13 +122,36 @@ def sam_outline(box_px: tuple[int, int, int, int], width: int, height: int, data
 
 # ---------- Muse Voice Transcribe (file mode) ----------
 
+def _wav_is_api_ready(audio: bytes) -> bool:
+    """True only for a WAV the API accepts as-is: PCM, mono, 16-bit, 16 or 24 kHz."""
+    import struct
+    if len(audio) < 36 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        return False
+    i = 12
+    while i + 8 <= len(audio):
+        cid, size = audio[i:i + 4], struct.unpack("<I", audio[i + 4:i + 8])[0]
+        if cid == b"fmt " and size >= 16:
+            fmt, ch, rate, _, _, bits = struct.unpack("<HHIIHH", audio[i + 8:i + 24])
+            return fmt == 1 and ch == 1 and bits == 16 and rate in (16000, 24000)
+        i += 8 + size + (size & 1)
+    return False
+
+
 def _to_wav16k(audio: bytes, content_type: str) -> bytes:
-    """Any phone recording -> 16 kHz mono 16-bit WAV, via ffmpeg (installed in the server image)."""
-    if content_type == "audio/wav" and audio[:4] == b"RIFF":
-        # Trust WAVs the phone page builds itself (it writes 16 kHz mono 16-bit).
+    """Any phone recording -> 16 kHz mono 16-bit WAV via ffmpeg (in the server image). WAVs are checked, not trusted."""
+    if _wav_is_api_ready(audio):
         return audio
-    out = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", "-f", "wav", "pipe:1"],
-                         input=audio, capture_output=True)
+    import os
+    import tempfile
+    # MP4/M4A needs a seekable input (its index sits at the end), so go through a temp file, not a pipe.
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(audio)
+        path = f.name
+    try:
+        out = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", "-f", "wav", "pipe:1"],
+                             capture_output=True)
+    finally:
+        os.unlink(path)
     if out.returncode != 0:
         raise RuntimeError("ffmpeg could not read the audio: " + out.stderr.decode(errors="replace")[:200])
     return out.stdout
@@ -136,7 +159,9 @@ def _to_wav16k(audio: bytes, content_type: str) -> bytes:
 
 def transcribe(audio: bytes, content_type: str, keywords: list[str], run_id: str | None = None) -> dict:
     costs.check_budget("meta")
+    t_conv = time.time()
     wav = _to_wav16k(audio, content_type)
+    t_conv = round(time.time() - t_conv, 2)
     req = {"model": config.VOICE_MODEL, "audioEncoding": "WAV", "mode": "PUSH_TO_TALK", "keywords": keywords}
     t0 = time.time()
     r = requests.post(f"{config.META_BASE_URL}/asr/transcribe", timeout=60,
@@ -147,5 +172,6 @@ def transcribe(audio: bytes, content_type: str, keywords: list[str], run_id: str
         raise RuntimeError(f"voice HTTP {r.status_code}: {r.text[:200]}")
     data = r.json()
     ms = data.get("audioDurationMs") or 0
-    costs.log("voice", "meta", ms / 3600000 * config.VOICE_PER_HOUR, run_id, seconds=dt, audio_ms=ms)
-    return {"text": (data.get("transcript") or "").strip(), "audio_ms": ms, "seconds": dt}
+    costs.log("voice", "meta", ms / 3600000 * config.VOICE_PER_HOUR, run_id, seconds=dt, audio_ms=ms, convert_s=t_conv)
+    return {"text": (data.get("transcript") or "").strip(), "audio_ms": ms, "seconds": dt, "convert_seconds": t_conv,
+            "bytes_in": len(audio)}

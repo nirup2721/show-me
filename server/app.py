@@ -41,18 +41,11 @@ CUSTOM_DOMAINS = ["askshowme.com"] if _os.environ.get("SHOWME_DOMAIN", "0") == "
 @modal.asgi_app(custom_domains=CUSTOM_DOMAINS)
 def web():
     import os
-    os.environ.setdefault("SHOWME_DATA", "/data")
+    # Fast local working copy; the volume at /data is the durable mirror (see showme/store.py).
+    os.environ.setdefault("SHOWME_DATA", "/root/showme-data")
+    os.environ.setdefault("SHOWME_VOLUME", "/data")
+    from showme import store
     from showme.api import app as fastapi_app
 
-    # Commit the volume after each request so run files and costs persist across containers.
-    @fastapi_app.middleware("http")
-    async def _commit_volume(request, call_next):
-        response = await call_next(request)
-        if request.method == "POST":
-            try:
-                data.commit()
-            except Exception:
-                pass
-        return response
-
+    store.start("/data", data.commit)
     return fastapi_app

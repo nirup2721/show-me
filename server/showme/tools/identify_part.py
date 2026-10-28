@@ -18,7 +18,7 @@ SCHEMA = {"type": "object", "properties": {"frame": {"type": "string", "descript
 def _ask(backend: str, prompt: str, data_url: str, run_id: str):
     try:
         return models.spark_json(backend, prompt, data_url, prompts.IDENTIFY_SCHEMA, "ShowMeIdentify",
-                                 run_id=run_id, kind="identify_part")
+                                 run_id=run_id, kind="identify_part", reasoning_effort=config.REASONING["identify_part"])
     except Exception as e:  # a failed secondary backend must never fail the run
         return None, {"backend": backend, "error": str(e)[:200]}
 

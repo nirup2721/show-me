@@ -38,11 +38,17 @@ FRAME_MAX_SIDE = 1024
 MIN_PART_PX = 60
 
 BASETEN_WAIT_S = 20    # breaker panel only: how long to wait for the open-weights answer after Meta has answered
+# Reasoning effort per role. identify at "minimal" was 2.5-2.8 s vs 4-5 s at "low" on Day 2 with the same parts and
+# concrete evidence sentences; the verifier stays at "low" (owner: verifier untouched).
+REASONING = {"identify_part": os.environ.get("SHOWME_IDENTIFY_REASONING", "minimal"), "verify_step": "low"}
+FRAME_TTL_S = 900      # uploaded frames waiting for their transcript are deleted after 15 minutes
 MAX_STEPS = 8          # per task
 MAX_VERIFY_TRIES = 3   # per step before needs_input
 CONSISTENCY_RUNS = 3   # offline test: same frame, same verdict, 3 of 3, before a step may appear in the video
 
-DATA_DIR = Path(os.environ.get("SHOWME_DATA", "/data" if Path("/data").exists() else "./data"))
+# Working data lives on fast local disk; store.py mirrors it to the Modal Volume (SHOWME_VOLUME) in the background.
+DATA_DIR = Path(os.environ.get("SHOWME_DATA", "./data"))
+VOLUME_DIR = os.environ.get("SHOWME_VOLUME", "")
 
 
 def key(backend: str) -> str:

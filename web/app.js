@@ -91,7 +91,7 @@ function captureFrame() {
     const c = document.createElement("canvas");
     c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
     c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
-    c.toBlob((b) => b ? resolve({ blob: b, w: c.width, h: c.height }) : reject(new Error("capture failed")), "image/jpeg", 0.82);
+    c.toBlob((b) => b ? resolve({ blob: b, w: c.width, h: c.height }) : reject(new Error("capture failed")), "image/jpeg", 0.72);
   });
 }
 
@@ -152,18 +152,41 @@ window.addEventListener("resize", drawOutline);
 cam.addEventListener("loadedmetadata", drawOutline);
 
 // ---------- server ----------
-async function api(path, form) {
+// Timing of the last question, phase by phase, shown in the foot line so a slow phone run can be diagnosed.
+const timing = {};
+function mark(name, t0, r) {
+  const ms = Math.round(performance.now() - t0);
+  const st = r && r.headers && r.headers.get("Server-Timing");
+  const server = st && /dur=(\d+)/.exec(st) ? Math.round(+RegExp.$1) : null;
+  timing[name] = server != null ? `${(ms / 1000).toFixed(1)}s (server ${(server / 1000).toFixed(1)}s)` : `${(ms / 1000).toFixed(1)}s`;
+  $("cost").textContent = Object.entries(timing).map(([k, v]) => `${k} ${v}`).join(" · ");
+}
+async function api(path, form, name) {
+  const t0 = performance.now();
   const r = await fetch(BACKEND + path, { method: form ? "POST" : "GET", body: form, headers: { "X-Show-Me-Key": KEY } });
+  if (name) mark(name, t0, r);
   if (r.status === 401) throw new Error("Access key wrong. Reload the page with the link you were given.");
   if (r.status === 503) throw new Error("Spending limit reached. Paid calls are off.");
   if (!r.ok) throw new Error(`Server error ${r.status}`);
   return r.json();
 }
 
-function render(r) {
+// Upload the frame as soon as the question starts (mic pressed / typing), so it travels while the voice is transcribed.
+let pendingFrame = null;   // Promise<{frame_id, w, h, bytes_in}> | null
+function uploadFrameEarly() {
+  pendingFrame = (async () => {
+    const f = await captureFrame();
+    timing.frame = `${Math.round(f.blob.size / 1024)} KB ${f.w}x${f.h}`;
+    const form = new FormData(); form.append("frame", f.blob, "frame.jpg");
+    return api("/frames", form, "upload");
+  })().catch((e) => { pendingFrame = null; throw e; });
+  return pendingFrame;
+}
+
+function render(r, opts = {}) {
   run = r;
-  $("run").textContent = r.id ? `run ${r.id}` : "";
-  $("cost").textContent = r.cost_usd ? `· $${r.cost_usd.toFixed(3)}` : "";
+  if (opts.quiet) { drawOutline(); return; }   // outline arrived: redraw only, do not re-speak
+  $("run").textContent = r.id ? `run ${r.id}${r.cost_usd ? ` · $${r.cost_usd.toFixed(3)}` : ""}` : "";
   const cls = { guiding: "", needs_input: "warn", done: "ok", failed: "bad" }[r.status] || "";
   setLines(r.display);
   setStatus((r.display && r.display.step) || r.message || "", cls);
@@ -179,12 +202,23 @@ function render(r) {
 async function startRun(question) {
   if (busy || !question) return;
   busy = true; setStatus("Looking…", "busy");
+  const t0 = performance.now();
   try {
-    const f = await captureFrame();
     const form = new FormData();
     form.append("question", question);
-    form.append("frame", f.blob, "frame.jpg");
-    render(await api("/runs", form));
+    let up = null;
+    try { up = pendingFrame ? await pendingFrame : null; } catch (e) { up = null; }
+    pendingFrame = null;
+    if (up && up.frame_id) form.append("frame_id", up.frame_id);
+    else { const f = await captureFrame(); form.append("frame", f.blob, "frame.jpg"); }
+    // 1. identify: the phone starts speaking the warning, object and step 1 as soon as this returns...
+    const r = await api("/runs", form, "identify");
+    timing["first words"] = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+    render(r);
+    // 2. ...while SAM draws the outline a moment later.
+    if (r.status === "guiding" && r.id) {
+      try { render(await api(`/runs/${r.id}/outline`, new FormData(), "outline"), { quiet: true }); } catch (e) { /* outline is optional */ }
+    }
   } catch (e) { setStatus(e.message, "bad"); }
   busy = false;
 }
@@ -195,7 +229,7 @@ async function advance() {
   try {
     const f = await captureFrame();
     const form = new FormData(); form.append("frame", f.blob, "frame.jpg");
-    render(await api(`/runs/${run.id}/advance`, form));
+    render(await api(`/runs/${run.id}/advance`, form, "check"));
   } catch (e) { setStatus(e.message, "bad"); }
   nextBtn.disabled = false; busy = false;
 }
@@ -236,7 +270,8 @@ async function startRecording() {
       try {
         const form = new FormData();
         form.append("audio", blob, "q." + (type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm"));
-        const t = await api("/transcribe", form);
+        timing.audio = `${Math.round(blob.size / 1024)} KB`;
+        const t = await api("/transcribe", form, "transcribe");
         busy = false;
         if (!t.text) { setStatus("I didn't catch that. Try again.", "warn"); return; }
         setStatus(`"${t.text}"`);
@@ -246,6 +281,8 @@ async function startRecording() {
     recorder.start();
     mic.classList.add("rec"); micLabel.textContent = "Listening…";
     speechSynthesis.cancel();
+    for (const k in timing) delete timing[k];
+    uploadFrameEarly().catch(() => {});   // the frame travels while the user is still talking
   } catch (e) {
     setStatus("Microphone not available. Type your question instead.", "warn");
     typed.hidden = false;
@@ -260,7 +297,7 @@ mic.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // ---------- typed question ----------
 $("type").addEventListener("click", () => { typed.hidden = !typed.hidden; if (!typed.hidden) questionInput.focus(); });
-$("ask").addEventListener("click", () => { const q = questionInput.value.trim(); if (q) startRun(q); });
+$("ask").addEventListener("click", () => { const q = questionInput.value.trim(); if (q) { for (const k in timing) delete timing[k]; uploadFrameEarly().catch(() => {}); startRun(q); } });
 questionInput.addEventListener("keydown", (e) => { if (e.key === "Enter") $("ask").click(); });
 
 // ---------- boot ----------

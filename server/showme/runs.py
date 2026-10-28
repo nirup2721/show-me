@@ -54,8 +54,11 @@ def new_run(question: str) -> dict:
 
 
 def save(run: dict) -> dict:
+    from . import store
     run["updated"] = now()
-    (_dir() / f"{run['id']}.json").write_text(json.dumps(run, indent=1), encoding="utf-8")
+    p = _dir() / f"{run['id']}.json"
+    p.write_text(json.dumps(run, indent=1), encoding="utf-8")
+    store.mark_dirty(p)
     return run
 
 

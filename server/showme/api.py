@@ -2,7 +2,7 @@
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from . import config, costs, models, runs, tools
+from . import config, costs, frames, models, runs, tools
 from .tools import advance_step as advance_mod
 
 import os
@@ -11,7 +11,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.1.5"  # bump on every deploy so /health shows which code is live
+VERSION = "0.2.2"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -31,6 +31,16 @@ async def _require_access_key(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _server_timing(request: Request, call_next):
+    """Server-Timing header: total time spent in this server, so the phone can tell server time from network time."""
+    import time as _t
+    t0 = _t.time()
+    response = await call_next(request)
+    response.headers["Server-Timing"] = f"app;dur={(_t.time() - t0) * 1000:.0f}"
+    return response
+
+
 # The phone page is hosted on Vercel at askshowme.com and calls this server from the browser.
 # Added AFTER the access-key middleware so CORS is the outermost layer: preflights are answered before the
 # key check, and 401s still carry CORS headers so the page can read them.
@@ -40,6 +50,7 @@ app.add_middleware(
     allow_origin_regex=r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.vercel\.app$|^http://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["X-Show-Me-Key", "Content-Type"],
+    expose_headers=["Server-Timing"],
     max_age=600,
 )
 
@@ -73,19 +84,36 @@ async def transcribe(audio: UploadFile = File(...)):
         raise HTTPException(502, str(e)[:300])
 
 
+@app.post("/frames")
+async def upload_frame(frame: UploadFile = File(...)):
+    """The phone uploads the frame the moment the mic is released, in parallel with transcription."""
+    _budget_guard()
+    return frames.put(await frame.read())
+
+
 @app.post("/runs")
-async def start_run(question: str = Form(...), frame: UploadFile = File(...)):
-    """First frame + question -> identify, outline, speak step 1."""
+async def start_run(question: str = Form(...), frame: UploadFile | None = File(None), frame_id: str = Form("")):
+    """Question + frame (uploaded now, or earlier via /frames) -> identify and speak step 1.
+    Returns as soon as identify is done; the phone then calls /runs/{id}/outline for the SAM outline so it can start
+    speaking while SAM runs."""
     _budget_guard()
     run = runs.new_run(question.strip())
     try:
-        data_url, w, h = models.frame_from_bytes(await frame.read())
+        stored = frames.get(frame_id) if frame_id else None
+        if stored:
+            data_url, w, h = stored
+        elif frame is not None:
+            data_url, w, h = models.frame_from_bytes(await frame.read())
+        else:
+            raise HTTPException(400, "send a frame file or a valid frame_id")
+        frames.keep_for_run(run["id"], data_url, w, h)
         tools.run("identify_part", run, frame=data_url, width=w, height=h)
-        outline = tools.run("outline_part", run, frame=data_url)
         warning = " ".join(x for x in (run.get("safety_warning", ""), run.get("prep", "")) if x)
         label = f", labeled {run['matched_label']}" if run["matched_label"] and run.get("label_matches_question") else ""
         obj = f"{run['object_name']}{label}. Start with the {run['part_name']}."
-        if outline["kind"] == "too_far":
+        x1, y1, x2, y2 = run["bbox_px"]
+        if max(x2 - x1, y2 - y1) < config.MIN_PART_PX:
+            run["outline"] = {"kind": "too_far", "box": [x1, y1, x2, y2], "long_side_px": max(x2 - x1, y2 - y1)}
             runs.set_status(run, "needs_input")
             runs.set_display(run, warning=warning, object_=obj,
                              step=f"I can't see the {run['part_name']} well. Move closer so it fills more of the screen, then tap Done.")
@@ -95,12 +123,32 @@ async def start_run(question: str = Form(...), frame: UploadFile = File(...)):
         else:
             runs.set_status(run, "failed")
             runs.set_display(run, warning=warning, object_=obj, step="I couldn't work out the steps.")
+    except HTTPException:
+        raise
     except costs.BudgetExhausted as e:
         runs.set_status(run, "failed", str(e))
     except Exception as e:
         runs.set_status(run, "failed", "Something went wrong: " + str(e)[:200])
         runs.event(run, "error", error=str(e)[:300])
     runs.save(run)
+    return runs.public_view(run)
+
+
+@app.post("/runs/{run_id}/outline")
+def outline(run_id: str):
+    """SAM outline of the current part on the frame the run started from. Called right after /runs."""
+    _budget_guard()
+    run = runs.load(run_id)
+    if not run:
+        raise HTTPException(404, "no such run")
+    stored = frames.for_run(run_id)
+    if stored and run.get("bbox_px") and (run.get("outline") or {}).get("kind") != "too_far":
+        data_url, _, _ = stored
+        try:
+            tools.run("outline_part", run, frame=data_url)
+        except Exception as e:
+            runs.event(run, "error", error=str(e)[:300])
+        runs.save(run)
     return runs.public_view(run)
 
 
@@ -115,6 +163,7 @@ async def advance(run_id: str, frame: UploadFile = File(...)):
         data_url, w, h = models.frame_from_bytes(await frame.read())
         if run["status"] == "needs_input" and run.get("outline", {}) and run["outline"].get("kind") == "too_far":
             # The user moved closer: re-identify on this frame, then proceed as a fresh start of step 1.
+            frames.keep_for_run(run["id"], data_url, w, h)
             tools.run("identify_part", run, frame=data_url, width=w, height=h)
             outline = tools.run("outline_part", run, frame=data_url)
             if outline["kind"] == "too_far":

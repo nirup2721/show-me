@@ -12,7 +12,8 @@ def verify_step(step: dict, data_url: str, run_id: str | None = None) -> dict:
     backend = config.route("verify_step", None)
     prompt = prompts.VERIFY_PROMPT.format(instruction=step["instruction"], evidence=step["expected_evidence"])
     result, meta = models.spark_json(backend, prompt, data_url, prompts.VERIFY_SCHEMA, "ShowMeVerify",
-                                     run_id=run_id, kind="verify_step", max_tokens=3000)
+                                     run_id=run_id, kind="verify_step", max_tokens=3000,
+                                     reasoning_effort=config.REASONING["verify_step"])
     verdict = result.get("verdict", "cannot_tell")
     if verdict not in ("pass", "fail", "cannot_tell"):
         verdict = "cannot_tell"
