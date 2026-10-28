@@ -5,8 +5,28 @@ from fastapi.responses import JSONResponse
 from . import config, costs, models, runs, tools
 from .tools import advance_step as advance_mod
 
-VERSION = "0.1.1"  # bump on every deploy so /health shows which code is live
+import os
+
+from fastapi import Request
+
+VERSION = "0.1.2"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
+
+# Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
+# The phone page gets it once from the owner (URL fragment or typed in) and keeps it in local storage;
+# it is never embedded in the page source. Set SHOWME_ACCESS_KEY in the Modal secret; unset = open (local dev only).
+_OPEN_PATHS = {"/health", "/", "/docs", "/openapi.json"}
+
+
+@app.middleware("http")
+async def _require_access_key(request: Request, call_next):
+    expected = os.environ.get("SHOWME_ACCESS_KEY", "")
+    path = request.url.path
+    if expected and path not in _OPEN_PATHS and not path.startswith("/static"):
+        given = request.headers.get("x-show-me-key") or request.query_params.get("key", "")
+        if given != expected:
+            return JSONResponse({"detail": "access key missing or wrong"}, status_code=401)
+    return await call_next(request)
 
 
 def _budget_guard():
@@ -18,7 +38,8 @@ def _budget_guard():
 @app.get("/health")
 def health():
     t = costs.totals()
-    return {"ok": True, "version": VERSION, "backends": {b: config.has_backend(b) for b in ("meta", "baseten")},
+    return {"ok": True, "version": VERSION, "access_key_required": bool(os.environ.get("SHOWME_ACCESS_KEY")),
+            "backends": {b: config.has_backend(b) for b in ("meta", "baseten")},
             "spend": t, "tools": [d["name"] for d in tools.definitions()]}
 
 

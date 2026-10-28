@@ -23,6 +23,11 @@ image = (
 app = modal.App("show-me")
 data = modal.Volume.from_name("show-me-data", create_if_missing=True)
 
+# askshowme.com is attached once the domain is registered in the Modal workspace (Settings > Custom Domains)
+# and its DNS record points at Modal. Until then deploying with it fails ("Registered domain ... not found").
+import os as _os
+CUSTOM_DOMAINS = ["askshowme.com"] if _os.environ.get("SHOWME_DOMAIN", "0") == "1" else []
+
 
 @app.function(
     image=image,
@@ -30,9 +35,10 @@ data = modal.Volume.from_name("show-me-data", create_if_missing=True)
     volumes={"/data": data},
     timeout=120,
     scaledown_window=300,
+    min_containers=1,   # keep one container warm so the first request of a demo is not a cold start
 )
 @modal.concurrent(max_inputs=8)
-@modal.asgi_app()
+@modal.asgi_app(custom_domains=CUSTOM_DOMAINS)
 def web():
     import os
     os.environ.setdefault("SHOWME_DATA", "/data")
