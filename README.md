@@ -57,8 +57,9 @@ Muse Spark Open drew tighter boxes on the breaker panel and missed the coffee ma
 ## Status
 
 - Day 1 (Oct 27): model tests on the real equipment photos.
-- Day 2 (Oct 28): server deployed on Modal at **https://askshowme.com** (DNS pending; the Modal address `nirup2721--show-me-web.us-east.modal.run` works meanwhile). The step verifier runs as an independent call inside the advance-step tool. Paid endpoints need an access key the phone page holds, so strangers cannot spend credits. See [server/README.md](server/README.md).
-- Next: the phone page (camera, push-to-talk, spoken steps, outline overlay).
+- Day 2 (Oct 28): server deployed on Modal (`nirup2721--show-me-web.us-east.modal.run`); the step verifier runs as an independent call inside the advance-step tool. Paid endpoints need an access key the phone page holds, so strangers cannot spend credits. See [server/README.md](server/README.md).
+- Day 2, later: the phone page ([web/](web/), plain HTML/JS, no framework) on Vercel at **https://askshowme.com**: live camera, hold-to-talk, the SAM outline drawn over the view, steps spoken by the phone, "Done, check it" sends a fresh frame to the verifier, and needs_input shows the message with "I did it, continue".
+- Next: Day 4, the full loop on the real machines; Day 5, all four objects at the station.
 
 ## License
 
