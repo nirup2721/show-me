@@ -3,8 +3,14 @@
 Routing (config.ROUTES): the frame goes to Meta and, when a Baseten key is present, to Baseten at the same time.
 Meta's object class decides which answer is kept: breaker panel -> Muse Spark Open (Baseten); anything else ->
 Muse Spark 1.3 (Meta). The discarded answer is summarised in the run file so the choice is auditable.
+
+Speed (owner's rule, Oct 28: speed over cost): Meta's latency has a long tail (same tokens in 2.6 s or 13 s), so if
+the first Meta call has not answered after HEDGE_AFTER_S a second identical Meta call is fired and the first answer
+wins. If both are slow, the Baseten answer already in flight is used as soon as it arrives. Every hedge is recorded
+in the run file (identify.hedged, identify.winner, identify.waited_s).
 """
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .. import config, models, prompts, runs
 
@@ -30,32 +36,61 @@ def _box_px(bbox: dict, w: int, h: int) -> list[int]:
 
 def run(run_record: dict, frame: str, width: int, height: int) -> dict:
     prompt = prompts.IDENTIFY_PROMPT.format(question=run_record["question"], max_steps=config.MAX_STEPS)
-    backends = ["meta"] + (["baseten"] if config.has_backend("baseten") else [])
-    pool = ThreadPoolExecutor(max_workers=2)
-    futures = {b: pool.submit(_ask, b, prompt, frame, run_record["id"]) for b in backends}
-    results = {"meta": futures["meta"].result()}       # Meta decides the object class, so wait for it first
+    have_baseten = config.has_backend("baseten")
+    pool = ThreadPoolExecutor(max_workers=3)
+    t0 = time.time()
+    futures = {"meta": pool.submit(_ask, "meta", prompt, frame, run_record["id"])}
+    if have_baseten:
+        futures["baseten"] = pool.submit(_ask, "baseten", prompt, frame, run_record["id"])
+    results: dict = {}
+    hedged = False
 
-    meta_answer, meta_meta = results["meta"]
-    if meta_answer is None:
+    # 1. Wait for the first Meta call up to HEDGE_AFTER_S; if it is slow, fire a second one.
+    done, _ = wait([futures["meta"]], timeout=config.HEDGE_AFTER_S, return_when=FIRST_COMPLETED)
+    if not done:
+        hedged = True
+        futures["meta2"] = pool.submit(_ask, "meta", prompt, frame, run_record["id"])
+        runs.event(run_record, "hedge", after_s=round(time.time() - t0, 2))
+
+    # 2. Take the first good answer from any Meta call; if both are slow, Baseten's answer counts too.
+    winner = None
+    pending = {k: f for k, f in futures.items()}
+    deadline = t0 + config.IDENTIFY_DEADLINE_S
+    while pending and winner is None and time.time() < deadline:
+        done, _ = wait(list(pending.values()), timeout=max(0.1, deadline - time.time()), return_when=FIRST_COMPLETED)
+        for k, f in list(pending.items()):
+            if f in done:
+                results[k] = f.result()
+                del pending[k]
+                if results[k][0] is not None and (k.startswith("meta") or hedged):
+                    winner = k
+                    break
+    if winner is None:
         pool.shutdown(wait=False)
-        raise models.SparkError("identify failed on Meta: " + meta_meta.get("error", "?"))
-    object_class = config.object_class_of(meta_answer["object_name"])
-    chosen = config.route("identify_part", object_class)
-    if chosen != "meta" and chosen in futures:
-        # Only the breaker panel waits for the open-weights answer (at most BASETEN_WAIT_S more).
-        try:
-            results[chosen] = futures[chosen].result(timeout=config.BASETEN_WAIT_S)
-        except Exception as e:
-            results[chosen] = (None, {"backend": chosen, "error": f"timed out or failed: {str(e)[:100]}"})
-    else:
-        for b in futures:
-            if b != "meta":
-                results[b] = (None, {"backend": b, "error": "not needed for this object; not awaited"})
-    pool.shutdown(wait=False)  # a still-running secondary call finishes and logs its cost on its own
+        errs = {k: (m or {}).get("error") for k, (a, m) in results.items()}
+        raise models.SparkError(f"identify: no answer within {config.IDENTIFY_DEADLINE_S:.0f}s ({errs})")
+    waited = round(time.time() - t0, 2)
+    answer, meta = results[winner]
+    source_backend = "meta" if winner.startswith("meta") else "baseten"
 
-    answer, meta = results.get(chosen, (None, None))
-    if answer is None:  # routed backend failed, timed out or absent: fall back to Meta
-        chosen, answer, meta = "meta", meta_answer, meta_meta
+    # 3. Routing by object class (from the winner's answer). The breaker panel prefers the open-weights answer.
+    object_class = config.object_class_of(answer["object_name"])
+    chosen = config.route("identify_part", object_class)
+    if chosen == "baseten" and source_backend == "meta" and "baseten" in futures:
+        if "baseten" not in results:
+            try:
+                results["baseten"] = futures["baseten"].result(timeout=config.BASETEN_WAIT_S)
+            except Exception as e:
+                results["baseten"] = (None, {"backend": "baseten", "error": f"timed out or failed: {str(e)[:100]}"})
+        if results["baseten"][0] is not None:
+            answer, meta = results["baseten"]
+            source_backend = "baseten"
+    chosen = source_backend
+    for k in futures:
+        if k not in results:
+            results[k] = (None, {"backend": "meta" if k.startswith("meta") else k, "error": "still running when the run moved on; not awaited"})
+    pool.shutdown(wait=False)  # losers finish on their own and log their cost
+    meta_answer, meta_meta = answer, meta  # names kept for the summary below
 
     for b, (a, m) in results.items():
         runs.add_cost(run_record, (m or {}).get("usd", 0.0))
@@ -75,9 +110,11 @@ def run(run_record: dict, frame: str, width: int, height: int) -> dict:
         "steps": steps, "current_step": 0,
         "identify": {
             "chosen_backend": chosen, "chosen_model": (meta or {}).get("model"), "seconds": (meta or {}).get("seconds"),
+            "hedged": hedged, "winner": winner, "waited_s": waited,
             "answers": {b: ({"object_name": a["object_name"], "part_name": a["part_name"], "seconds": m.get("seconds")}
                             if a else {"error": m.get("error")}) for b, (a, m) in results.items()},
         },
     })
-    runs.event(run_record, "identified", backend=chosen, object=answer["object_name"], part=answer["part_name"])
+    runs.event(run_record, "identified", backend=chosen, winner=winner, hedged=hedged, waited_s=waited,
+               object=answer["object_name"], part=answer["part_name"])
     return answer

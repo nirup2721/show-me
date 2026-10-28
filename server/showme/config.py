@@ -38,11 +38,16 @@ FRAME_MAX_SIDE = 1024
 MIN_PART_PX = 60
 
 BASETEN_WAIT_S = 20    # breaker panel only: how long to wait for the open-weights answer after Meta has answered
+# Speed over cost (owner, Oct 28 evening): if Meta's identify has not answered after HEDGE_AFTER_S, fire a second
+# identical Meta call and take whichever answers first; if both are slow, the Baseten answer (already in flight for
+# routing) is used as soon as it arrives. IDENTIFY_DEADLINE_S bounds the whole wait.
+HEDGE_AFTER_S = 3.0
+IDENTIFY_DEADLINE_S = 30.0
 # Reasoning effort per role. identify at "minimal" was 2.5-2.8 s vs 4-5 s at "low" on Day 2 with the same parts and
 # concrete evidence sentences; the verifier stays at "low" (owner: verifier untouched).
 REASONING = {"identify_part": os.environ.get("SHOWME_IDENTIFY_REASONING", "minimal"), "verify_step": "low"}
 FRAME_TTL_S = 900      # uploaded frames waiting for their transcript are deleted after 15 minutes
-MAX_STEPS = 8          # per task
+MAX_STEPS = 6          # per task (was 8; fewer, shorter steps mean fewer output tokens and a faster first answer)
 MAX_VERIFY_TRIES = 3   # per step before needs_input
 CONSISTENCY_RUNS = 3   # offline test: same frame, same verdict, 3 of 3, before a step may appear in the video
 

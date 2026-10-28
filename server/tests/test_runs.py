@@ -107,6 +107,29 @@ def test_routing_table():
     assert config.route("identify_part", "*") == "meta"
 
 
+def test_hedged_identify_takes_the_faster_meta_call(monkeypatch):
+    import time
+    calls = {"n": 0}
+
+    def spark_json(backend, prompt, data_url, schema, name, **kw):
+        calls["n"] += 1
+        if backend == "meta" and calls["n"] == 1:
+            time.sleep(1.0)  # the slow first call
+        answer = {"object_name": "coffee machine", "part_name": f"screen{calls['n']}", "bbox": {"x_min": 100, "y_min": 100, "x_max": 400, "y_max": 400},
+                  "matched_label": "", "label_matches_question": False, "safety_warning": "", "prep": "",
+                  "steps": [{"instruction": "Tap.", "part": "screen", "expected_evidence": "menu shown"}]}
+        return answer, {"backend": backend, "model": "fake", "seconds": 0.1, "usd": 0.005, "usage": {}}
+    monkeypatch.setattr("showme.models.spark_json", spark_json)
+    monkeypatch.setattr(config, "HEDGE_AFTER_S", 0.2)
+    os.environ.pop("BASETEN_API_KEY", None)
+    run = runs.new_run("q")
+    tools.run("identify_part", run, frame=FRAME, width=768, height=1024)
+    assert run["identify"]["hedged"] is True
+    assert run["identify"]["winner"] == "meta2"
+    assert run["part_name"] == "screen2"
+    assert run["identify"]["waited_s"] < 1.0
+
+
 def test_run_persists_and_reloads(monkeypatch):
     run = start(monkeypatch)
     again = runs.load(run["id"])
