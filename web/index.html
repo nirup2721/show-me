@@ -3,43 +3,111 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#0b0b0d">
+<meta name="theme-color" content="#0C0E12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Show Me">
 <title>Show Me</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <main id="stage">
-    <video id="cam" autoplay playsinline muted></video>
-    <img id="still" alt="" hidden>
-    <canvas id="overlay"></canvas>
+<body data-screen="start">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mark" viewBox="0 0 64 64"><rect x="6" y="6" width="52" height="52" rx="14" fill="none" stroke="currentColor" stroke-width="4"/><circle cx="32" cy="32" r="13" fill="none" stroke="currentColor" stroke-width="4"/><circle cx="32" cy="32" r="4" fill="currentColor"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-camcheck" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m9 13 2 2 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-cam" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-speak" viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6L8 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
 
-    <div id="top">
-      <div id="warn" class="line"></div>
-      <div id="obj" class="line"></div>
-      <div id="status" class="line">Point the camera at the machine, then hold the mic and ask.</div>
+<main id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <img id="still" alt="" hidden>
+  <canvas id="overlay"></canvas>
+  <div id="scrim"></div>
+
+  <!-- 1. Start -->
+  <section id="s-start" class="screen">
+    <div class="start-inner">
+      <div class="brand"><svg class="mark"><use href="#i-mark"/></svg><span class="wordmark">Show Me</span></div>
+      <h1 class="headline">Point at anything.<br>Ask how.<br><span class="accent">It shows you.</span></h1>
+      <p class="lede">Aim your phone at a machine and ask out loud. Show Me names the part, draws it on your screen, and talks you through one step at a time, checking each one through the camera before the next.</p>
+      <p class="note">Uses your camera and microphone. Nothing is stored.</p>
+      <button id="start" class="primary">Start</button>
+      <div class="smallcaps">askshowme.com</div>
+    </div>
+  </section>
+
+  <!-- top panel: listening / thinking / step / needs_input -->
+  <section id="top" class="panel top" hidden>
+    <div id="t-listen" class="row" hidden><span class="dot"></span><span class="t-title">Listening…</span><span class="t-sub">release to ask</span></div>
+    <div id="t-think" class="row" hidden><span class="t-title">Thinking…</span></div>
+    <div id="t-idle" class="row" hidden><span class="t-sub">Point at the machine, then hold the mic and ask.</span></div>
+    <div id="t-step" hidden>
+      <div id="warn" class="warn"><svg class="ico"><use href="#i-warn"/></svg><span id="warnText"></span></div>
+      <div id="obj" class="muted"></div>
+      <div id="stepLine" class="step"></div>
+      <div id="feedback" class="feedback"></div>
+      <div class="progress"><div id="segments" class="segments"></div><span id="stepCount" class="muted small"></span></div>
+    </div>
+    <div id="t-need" hidden>
+      <div id="needCount" class="muted small"></div>
+      <div id="needHead" class="step"></div>
+      <div id="needBody" class="body"></div>
+    </div>
+    <div id="bar" class="bar" hidden><i></i></div>
+  </section>
+
+  <!-- 5. Done -->
+  <section id="s-done" class="screen" hidden>
+    <div class="done-inner panel">
+      <div class="brand small"><svg class="mark"><use href="#i-mark"/></svg><span id="doneObj" class="smallcaps"></span></div>
+      <div class="bigcheck"><svg><use href="#i-check"/></svg></div>
+      <h2 class="headline">All steps done.</h2>
+      <p id="doneLine" class="lede"></p>
+      <ol id="doneSteps" class="steps"></ol>
+      <button id="again" class="primary">Ask something else</button>
+      <div id="doneFoot" class="dim small"></div>
+    </div>
+  </section>
+
+  <!-- bottom controls -->
+  <section id="bottom" hidden>
+    <div id="heard" class="panel quiet" hidden></div>
+    <div id="typed" class="panel quiet typed" hidden>
+      <input id="question" type="text" placeholder="Type your question" autocomplete="off">
+      <button id="ask" class="secondary">Ask</button>
     </div>
 
-    <div id="bottom">
-      <div id="typed" hidden>
-        <input id="question" type="text" placeholder="Type your question" autocomplete="off">
-        <button id="ask" class="small">Ask</button>
-      </div>
-      <div id="controls">
-        <button id="type" class="round small" title="Type instead">Aa</button>
-        <button id="mic" class="round big" aria-label="Hold to talk">
-          <span id="micLabel">Hold to talk</span>
-        </button>
-        <button id="photo" class="round small" title="Use a photo">📷</button>
-        <input id="file" type="file" accept="image/*" capture="environment" hidden>
-      </div>
-      <div id="actions" hidden>
-        <button id="next" class="wide">Done, check it</button>
-        <button id="confirm" class="wide alt" hidden>I did it, continue</button>
-        <button id="restart" class="wide alt" hidden>Start over</button>
-      </div>
-      <div id="foot"><span id="run"></span> <span id="cost"></span></div>
+    <div id="c-listen" class="controls" hidden>
+      <button id="type" class="round secondary" title="Type instead">Aa</button>
+      <button id="mic" class="mic" aria-label="Hold to talk"><span class="ring r1"></span><span class="ring r2"></span><span id="micLabel">Hold to talk</span></button>
+      <button id="photo" class="round secondary" title="Use a photo"><svg class="ico"><use href="#i-cam"/></svg></button>
+      <input id="file" type="file" accept="image/*" capture="environment" hidden>
     </div>
-  </main>
-  <script src="app.js"></script>
+
+    <div id="c-step" class="controls" hidden>
+      <button id="type2" class="round secondary" title="Type instead">Aa</button>
+      <button id="askagain" class="outline">Ask again</button>
+      <button id="repeat" class="round secondary" title="Say it again"><svg class="ico"><use href="#i-speak"/></svg></button>
+    </div>
+    <button id="next" class="primary" hidden><svg class="ico"><use href="#i-camcheck"/></svg><span id="nextLabel">Done, check it</span></button>
+    <button id="confirm" class="secondary wide" hidden>I did it, continue</button>
+    <div id="confirmNote" class="dim small center" hidden>Continuing without a camera check is noted in the run log.</div>
+
+    <div id="foot" class="dim small center"><span id="run"></span><span id="cost"></span></div>
+  </section>
+
+  <div id="flash" hidden><svg><use href="#i-check"/></svg></div>
+</main>
+<script src="app.js"></script>
 </body>
 </html>
