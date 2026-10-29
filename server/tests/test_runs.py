@@ -203,7 +203,7 @@ def fake_planner_replay(monkeypatch, answer, calls):
 
 
 def test_replay_empty_steps_gets_one_forced_retry_and_steps(monkeypatch):
-    for rid, fx in FIXTURES.items():
+    for rid, fx in ((k, v) for k, v in FIXTURES.items() if not k.startswith("_")):
         calls = []
         fake_planner_replay(monkeypatch, fx["answer"], calls)
         q, heard = api.task_question(fx["question"])
