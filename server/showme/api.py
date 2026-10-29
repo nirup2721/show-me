@@ -12,7 +12,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.5.2"  # bump on every deploy so /health shows which code is live
+VERSION = "0.6.0"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -139,6 +139,7 @@ async def start_run(question: str = Form(...), frame: UploadFile | None = File(N
     try:
         data_url, w, h = await _frame_from(frame, frame_id)
         frames.keep_for_run(run["id"], data_url, w, h)
+        frames.keep_step_before(run["id"], 0, data_url, w, h)   # the view when step 1 is spoken
         focus = None
         if focus_name:
             try:
@@ -211,7 +212,10 @@ async def advance(run_id: str, frame: UploadFile = File(...)):
                 runs.set_status(run, "guiding", f"Step 1. {run['steps'][0]['instruction']}")
             run["message"] = run["display"]["step"]  # after re-identify, speak only the step line
         else:
+            before_step = run["current_step"]
             await run_in_threadpool(tools.run, "advance_step", run, frame=data_url)
+            if run["status"] == "guiding" and run["current_step"] != before_step:
+                frames.keep_step_before(run["id"], run["current_step"], data_url, w, h)
             if run["status"] == "guiding" and run.get("outline") is None:
                 # Outline the next step's part on this frame if Spark gave us a box for it; we reuse the identify box
                 # only for step 1, so later steps show the verifier's feedback without an outline unless re-identified.
@@ -235,8 +239,10 @@ async def check(run_id: str, frame: UploadFile = File(...), seq: int = Form(0), 
     if not run:
         raise HTTPException(404, "no such run")
     try:
-        data_url, w, h = models.frame_from_bytes(await frame.read())
-        judged = await run_in_threadpool(advance_mod.judge, run, data_url)
+        # Check frames arrive at up to 1024 px so the part close-up is sharp; the context view is shrunk server-side.
+        data_url, w, h = models.frame_from_bytes(await frame.read(), max_side=1024)
+        before = frames.step_before(run_id, run["current_step"])
+        judged = await run_in_threadpool(advance_mod.judge, run, data_url, before[0] if before else None)
         if judged is None:
             return {"ok": False, "status": run["status"], "message": run.get("message", "")}
         step_index, verdict = judged
@@ -245,6 +251,8 @@ async def check(run_id: str, frame: UploadFile = File(...), seq: int = Form(0), 
             with runs.lock(run_id):
                 fresh = runs.load(run_id)
                 out = advance_mod.record_check(fresh, step_index, verdict, seq, auto_advance=bool(auto_advance))
+                if out.get("advanced") and fresh["status"] == "guiding":
+                    frames.keep_step_before(run_id, fresh["current_step"], data_url, w, h)   # this view = next step's "before"
                 runs.save(fresh)
                 if out.get("advanced"):
                     out["run"] = runs.public_view(fresh)

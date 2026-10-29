@@ -21,8 +21,12 @@ IDENTIFY_SCHEMA = {
                     "instruction": {"type": "string", "description": "One short spoken sentence."},
                     "part": {"type": "string", "description": "Noun phrase for the part this step touches."},
                     "expected_evidence": {"type": "string", "description": "One sentence a camera check could confirm from a photo taken right after the step."},
+                    "bbox": {"type": "object", "description": "Box around the part this step touches, 0-1000 grid of this photo. If that part is not visible, the box of the area where the change will appear.",
+                             "properties": {"x_min": {"type": "integer"}, "y_min": {"type": "integer"},
+                                            "x_max": {"type": "integer"}, "y_max": {"type": "integer"}},
+                             "required": ["x_min", "y_min", "x_max", "y_max"], "additionalProperties": False},
                 },
-                "required": ["instruction", "part", "expected_evidence"],
+                "required": ["instruction", "part", "expected_evidence", "bbox"],
                 "additionalProperties": False,
             },
         },
@@ -54,7 +58,9 @@ IDENTIFY_PROMPT = (
     "breaker handle or lever, describe its done position relative to things in the same photo: which side of its slot it "
     "sits on, whether it lines up with the neighbouring handles, and which printed word (ON/OFF) is next to it; also say "
     "what the not-done position would look like. Prefer evidence with a large visible change (a screen, a light, a cup "
-    "appearing) over a small one, and add a final step whose evidence is the outcome the user cares about."
+    "appearing) over a small one, and add a final step whose evidence is the outcome the user cares about. For every "
+    "step also give bbox: a tight box (0-1000 grid of this photo) around the part that step touches, or around where its "
+    "change will show; the camera check looks closely inside that box."
 )
 
 VERIFY_SCHEMA = {
@@ -67,6 +73,34 @@ VERIFY_SCHEMA = {
     "required": ["verdict", "evidence_seen", "reason"],
     "additionalProperties": False,
 }
+
+VERIFY_PAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "change": {"type": "string", "description": "One sentence: what is different between the BEFORE and AFTER close-ups of the part, or 'no visible change'."},
+        "verdict": {"type": "string", "enum": ["pass", "fail", "cannot_tell"]},
+        "evidence_seen": {"type": "string", "description": "One sentence: the state of the named thing in the AFTER image."},
+        "reason": {"type": "string"},
+    },
+    "required": ["change", "verdict", "evidence_seen", "reason"],
+    "additionalProperties": False,
+}
+
+VERIFY_PAIR_PROMPT = (
+    "You are an independent checker. Image 1 is a close-up of the part BEFORE the user was told the step. Image 2 is the "
+    "same close-up NOW. Image 3 is the whole view now, small, for context only. Decide whether the step has been "
+    "completed, using only what is visible.\n"
+    "Step: \"{instruction}\"\n"
+    "Expected evidence if done: \"{evidence}\"\n"
+    "Judge the AFTER image (image 2) first: does it clearly show the expected evidence? If yes, answer pass, even if "
+    "nothing changed since image 1 (the step may have been done already). If image 2 clearly shows the not-done state, "
+    "answer fail. Answer cannot_tell if the part is hidden, blurry, out of the close-up, or its state cannot be judged. "
+    "Then describe what changed between image 1 and image 2 (a lever, handle, button, light, screen or object moving, "
+    "appearing or changing state), or 'no visible change'; use the change only as supporting evidence for a state that "
+    "is hard to read, never as the reason to fail a step whose done state is already visible. A hand or finger does not "
+    "by itself mean not done. For switches and handles, read the handle's position against the printed marks and its "
+    "neighbours in both images; do not guess from a small offset. Nobody's word counts as evidence."
+)
 
 VERIFY_PROMPT = (
     "You are an independent checker. You see one photo taken just now. Decide whether the step below has been completed, "

@@ -14,10 +14,10 @@ from . import config, costs
 
 # ---------- frames ----------
 
-def frame_from_bytes(data: bytes) -> tuple[str, int, int]:
-    """Downsize to FRAME_MAX_SIDE, JPEG, return (data_url, width, height). All coordinates refer to this size."""
+def frame_from_bytes(data: bytes, max_side: int | None = None) -> tuple[str, int, int]:
+    """Downsize to max_side (default FRAME_MAX_SIDE), JPEG, return (data_url, width, height). All coordinates refer to this size."""
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
-    img.thumbnail((config.FRAME_MAX_SIDE, config.FRAME_MAX_SIDE))
+    img.thumbnail((max_side or config.FRAME_MAX_SIDE,) * 2)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), img.width, img.height
@@ -29,19 +29,49 @@ class SparkError(RuntimeError):
     pass
 
 
-def spark_json(backend: str, prompt: str, data_url: str, schema: dict, schema_name: str,
+def crop_data_url(data_url: str, box: list[int] | tuple, pad: float = 0.3, max_side: int = 512,
+                  box_frame: tuple[int, int] | None = None) -> str:
+    """Cut a region (pixel box, padded by `pad` of its size per side) and return it as a JPEG data URL.
+    box_frame = (w, h) of the frame the box was measured on; the box is scaled if this image is a different size."""
+    img = Image.open(io.BytesIO(base64.b64decode(data_url.split(",", 1)[1])))
+    x1, y1, x2, y2 = box
+    if box_frame and box_frame[0] and img.width != box_frame[0]:
+        s = img.width / box_frame[0]
+        x1, y1, x2, y2 = int(x1 * s), int(y1 * s), int(x2 * s), int(y2 * s)
+    px, py = int((x2 - x1) * pad), int((y2 - y1) * pad)
+    c = img.crop((max(0, x1 - px), max(0, y1 - py), min(img.width, x2 + px), min(img.height, y2 + py)))
+    if max(c.size) > max_side:
+        c.thumbnail((max_side, max_side))
+    elif max(c.size) < 384 and max(c.size) > 0:   # tiny parts: scale up so the model gets a legible close-up
+        s = 384 / max(c.size)
+        c = c.resize((max(1, int(c.width * s)), max(1, int(c.height * s))), Image.LANCZOS)
+    buf = io.BytesIO(); c.save(buf, format="JPEG", quality=85)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def shrink_data_url(data_url: str, max_side: int) -> str:
+    img = Image.open(io.BytesIO(base64.b64decode(data_url.split(",", 1)[1])))
+    if max(img.size) <= max_side:
+        return data_url
+    img.thumbnail((max_side, max_side))
+    buf = io.BytesIO(); img.save(buf, format="JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def spark_json(backend: str, prompt: str, data_url: str | list[str], schema: dict, schema_name: str,
                run_id: str | None = None, kind: str = "spark", max_tokens: int = 3000,
                reasoning_effort: str = "low") -> tuple[dict, dict]:
-    """One Chat Completions call with a strict JSON schema. Returns (parsed_json, meta)."""
+    """One Chat Completions call with a strict JSON schema. data_url may be a list (images in order). Returns (parsed_json, meta)."""
     costs.check_budget(backend)
     base = config.META_BASE_URL if backend == "meta" else config.BASETEN_BASE_URL
+    urls = data_url if isinstance(data_url, list) else [data_url]
     body = {
         "model": config.MODELS[backend],
         "reasoning_effort": reasoning_effort,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": data_url}},
+            *[{"type": "image_url", "image_url": {"url": u}} for u in urls],
         ]}],
         "response_format": {"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": schema}},
     }

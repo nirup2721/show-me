@@ -65,11 +65,23 @@ def for_run(run_id: str) -> tuple[str, int, int] | None:
     return get(f"run-{run_id}")
 
 
+def keep_step_before(run_id: str, step_index: int, data_url: str, w: int, h: int):
+    """The view when a step was spoken: the verifier compares the current frame against it."""
+    p = _dir() / f"run-{run_id}-step{step_index}.json"
+    p.write_text(json.dumps({"data_url": data_url, "w": w, "h": h, "ts": time.time()}), encoding="utf-8")
+    store.mark_dirty(p)
+
+
+def step_before(run_id: str, step_index: int) -> tuple[str, int, int] | None:
+    return get(f"run-{run_id}-step{step_index}")
+
+
 def sweep():
     cutoff = time.time() - config.FRAME_TTL_S
+    run_cutoff = time.time() - 4 * config.FRAME_TTL_S   # a run's start and per-step frames live an hour
     for p in _dir().glob("*.json"):
         try:
-            if p.stat().st_mtime < cutoff:
+            if p.stat().st_mtime < (run_cutoff if p.name.startswith("run-") else cutoff):
                 p.unlink()
                 store.mark_dirty(p)
         except OSError:

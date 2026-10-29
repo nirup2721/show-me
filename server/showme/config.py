@@ -58,6 +58,12 @@ REASONING = {"identify_part": os.environ.get("SHOWME_IDENTIFY_REASONING", "minim
 # Auto-check (Day 3): the phone sends a frame every ~2 s to /check; a step advances when the last CHECK_PASSES
 # verdicts on it are passes within CHECK_WINDOW_S. The verifier is hedged like identify: a second call after
 # VERIFY_HEDGE_S if the first has not answered.
+# Verifier input mode: "single" = one 512 px frame (Day 3 morning); "pair_crop" = before/after close-ups of the step's
+# part (box padded 30%, cut from the 1024 px frame) plus the small whole frame for context (Day 3 evening).
+VERIFY_MODE = os.environ.get("SHOWME_VERIFY_MODE", "pair_crop")
+CROP_PAD = 0.30
+CROP_MAX_SIDE = 512
+CONTEXT_MAX_SIDE = 384
 CHECK_PASSES = 2
 CHECK_WINDOW_S = 10.0
 VERIFY_HEDGE_S = 2.0

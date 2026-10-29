@@ -31,7 +31,7 @@ def fake_identify(monkeypatch, object_name="coffee machine"):
 def fake_verifier(monkeypatch, verdicts):
     it = iter(verdicts)
 
-    def verify_step(step, frame, run_id=None):
+    def verify_step(step, frame, run_id=None, **kw):
         v = next(it)
         return {"verdict": v, "evidence_seen": f"saw {v}", "reason": "because", "backend": "meta", "model": "fake", "seconds": 0.1, "usd": 0.003}
     monkeypatch.setattr("showme.tools.advance_step.verify_step", verify_step)

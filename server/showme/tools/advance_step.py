@@ -19,13 +19,15 @@ def _speak_step(run_record: dict) -> str:
     return f"Step {n}. {step['instruction']}"
 
 
-def judge(run_record: dict, frame: str) -> tuple[int, dict] | None:
+def judge(run_record: dict, frame: str, before_url: str | None = None) -> tuple[int, dict] | None:
     """Auto-check, part 1 (no state change, may run in parallel): verify the frame against the current step.
     Returns (step_index, verdict) or None if the run is not being guided."""
     step = runs.current_step(run_record)
     if step is None or run_record["status"] != "guiding":
         return None
-    return run_record["current_step"], verify_step(step, frame, run_record["id"])
+    box = step.get("bbox_px") or run_record.get("bbox_px")
+    return run_record["current_step"], verify_step(step, frame, run_record["id"], before_url=before_url, box=box,
+                                                   box_frame=tuple(run_record.get("frame_size") or ()) or None)
 
 
 def record_check(run_record: dict, step_index: int, verdict: dict, seq: int = 0, auto_advance: bool = False) -> dict:
@@ -35,7 +37,7 @@ def record_check(run_record: dict, step_index: int, verdict: dict, seq: int = 0,
         return {"ok": False, "stale": True, "status": run_record["status"], "step": run_record["current_step"]}
     step = run_record["steps"][step_index]
     runs.add_cost(run_record, verdict.get("usd", 0.0))
-    rec = {k: verdict.get(k) for k in ("verdict", "evidence_seen", "reason", "backend", "seconds", "hedged")}
+    rec = {k: verdict.get(k) for k in ("verdict", "evidence_seen", "reason", "change", "mode", "backend", "seconds", "hedged")}
     rec["ts"] = time.time(); rec["seq"] = seq; rec["auto"] = True
     step["verdicts"].append(rec)
     runs.event(run_record, "checked", step=step_index, verdict=verdict["verdict"], seq=seq)
@@ -82,10 +84,14 @@ def run(run_record: dict, frame: str) -> dict:
         return {"ok": False, "message": run_record.get("message", ""), "status": run_record["status"]}
 
     runs.set_status(run_record, "verifying")
-    verdict = verify_step(step, frame, run_record["id"])
+    from .. import frames as _frames
+    before = _frames.step_before(run_record["id"], run_record["current_step"])
+    verdict = verify_step(step, frame, run_record["id"], before_url=before[0] if before else None,
+                          box=step.get("bbox_px") or run_record.get("bbox_px"),
+                          box_frame=tuple(run_record.get("frame_size") or ()) or None)
     runs.add_cost(run_record, verdict["usd"])
     step["tries"] += 1
-    step["verdicts"].append({k: verdict.get(k) for k in ("verdict", "evidence_seen", "reason", "backend", "seconds", "hedged")} | {"ts": time.time()})
+    step["verdicts"].append({k: verdict.get(k) for k in ("verdict", "evidence_seen", "reason", "change", "mode", "backend", "seconds", "hedged")} | {"ts": time.time()})
     runs.event(run_record, "verified", step=run_record["current_step"], verdict=verdict["verdict"], seen=verdict["evidence_seen"])
 
     if verdict["verdict"] == "pass":

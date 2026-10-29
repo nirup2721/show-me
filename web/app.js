@@ -6,7 +6,7 @@
 
 const BACKEND = "https://nirup2721--show-me-web.us-east.modal.run";
 const FRAME_LONG_SIDE = 768;
-const CHECK_LONG_SIDE = 512;      // auto-check frames are smaller: the verifier judges one named thing, not the scene
+const CHECK_LONG_SIDE = 1024;     // check frames: the server cuts a sharp close-up of the part from this and shrinks the rest
 const CHECK_EVERY_MS = 1000, CHECK_MAX_INFLIGHT = 3, CHECK_GIVE_UP_MS = 60000;
 const ACCENT = "#4FE3FF";
 

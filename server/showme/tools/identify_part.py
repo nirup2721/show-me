@@ -115,6 +115,7 @@ def run(run_record: dict, frame: str, width: int, height: int, focus: dict | Non
     steps = []
     for s in answer["steps"][: config.MAX_STEPS]:
         steps.append({"instruction": s["instruction"], "part": s["part"], "expected_evidence": s["expected_evidence"],
+                      "bbox_px": _box_px(s["bbox"], width, height) if s.get("bbox") else None,
                       "status": "pending", "confirmed_by": None, "tries": 0, "verdicts": []})
 
     run_record.update({
