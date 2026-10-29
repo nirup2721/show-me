@@ -9,6 +9,7 @@ the first Meta call has not answered after HEDGE_AFTER_S a second identical Meta
 wins. If both are slow, the Baseten answer already in flight is used as soon as it arrives. Every hedge is recorded
 in the run file (identify.hedged, identify.winner, identify.waited_s).
 """
+import re
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -108,6 +109,21 @@ def run(run_record: dict, frame: str, width: int, height: int, focus: dict | Non
             f.add_done_callback(lambda fut, k=k: _record_late(run_id, k, fut))
     pool.shutdown(wait=False)  # losers finish on their own, log their cost, and land in the run file
     meta_answer, meta_meta = answer, meta  # names kept for the summary below
+    raw = {winner: answer}
+
+    # 3b. Station, Oct 29 night: the planner answered in <2 s but with an EMPTY steps list for "How do I use this
+    #     machine?" and for the one-word transcript "Here" (the prompt's look-around clause). A task question never
+    #     ends without steps: one more Meta call with the force line. Raw planner outputs are kept for replay tests.
+    retried = False
+    if not answer["steps"] and not re.search(prompts.GENERAL_QUESTION, run_record["question"], re.I):
+        retried = True
+        runs.event(run_record, "empty_steps_retry", object=answer["object_name"])
+        a2, m2 = _ask("meta", prompt + prompts.IDENTIFY_FORCE_LINE, frame, run_record["id"])
+        results["meta_retry"] = (a2, m2)
+        if a2 is not None:
+            raw["meta_retry"] = a2
+            if a2["steps"]:
+                answer, meta, winner = a2, m2, "meta_retry"
 
     for b, (a, m) in results.items():
         runs.add_cost(run_record, (m or {}).get("usd", 0.0))
@@ -128,7 +144,7 @@ def run(run_record: dict, frame: str, width: int, height: int, focus: dict | Non
         "steps": steps, "current_step": 0,
         "identify": {
             "chosen_backend": chosen, "chosen_model": (meta or {}).get("model"), "seconds": (meta or {}).get("seconds"),
-            "hedged": hedged, "winner": winner, "waited_s": waited,
+            "hedged": hedged, "winner": winner, "waited_s": waited, "retried_empty_steps": retried, "raw": raw,
             "answers": {b: ({"object_name": a["object_name"], "part_name": a["part_name"], "seconds": m.get("seconds")}
                             if a else {"error": m.get("error")}) for b, (a, m) in results.items()},
         },

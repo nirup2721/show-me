@@ -1,0 +1,46 @@
+{
+ "20261029-175300-8337": {
+  "question": "How do I use this machine?",
+  "frame_size": [
+   432,
+   768
+  ],
+  "answer": {
+   "object_name": "Mini-Starbucks coffee machine",
+   "part_name": "Touchscreen drink menu",
+   "bbox": {
+    "x_min": 120,
+    "y_min": 300,
+    "x_max": 880,
+    "y_max": 560
+   },
+   "matched_label": "",
+   "label_matches_question": false,
+   "safety_warning": "",
+   "prep": "",
+   "steps": []
+  }
+ },
+ "20261029-221002-e3b5": {
+  "question": "Here",
+  "frame_size": [
+   432,
+   768
+  ],
+  "answer": {
+   "object_name": "Fire extinguisher",
+   "part_name": "Extinguisher handle",
+   "bbox": {
+    "x_min": 300,
+    "y_min": 100,
+    "x_max": 700,
+    "y_max": 260
+   },
+   "matched_label": "",
+   "label_matches_question": false,
+   "safety_warning": "",
+   "prep": "",
+   "steps": []
+  }
+ }
+}

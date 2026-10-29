@@ -12,7 +12,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.6.0"  # bump on every deploy so /health shows which code is live
+VERSION = "0.6.1"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -99,6 +99,15 @@ def is_general(question: str) -> bool:
     return not question.strip() or bool(_re.search(prompts.GENERAL_QUESTION, question.strip(), _re.I))
 
 
+def task_question(question: str, focus_name: str = "") -> tuple[str, str | None]:
+    """What the planner is asked. A one-word transcript ("Here", "This", "Help") is a request for help with what is
+    in view (station, Oct 29: the planner returned no steps for "Here"). Returns (question, heard_or_None)."""
+    q = question.strip()
+    if len(q.split()) == 1 and not focus_name:
+        return "How do I use this machine?", q
+    return q, None
+
+
 async def _frame_from(frame: UploadFile | None, frame_id: str):
     stored = frames.get(frame_id) if frame_id else None
     if stored:
@@ -135,7 +144,10 @@ async def start_run(question: str = Form(...), frame: UploadFile | None = File(N
     _budget_guard()
     if is_general(question) and not focus_name:
         return {"status": "survey_needed", "message": "That sounds like a look-around question.", "frame_id": frame_id}
-    run = runs.new_run(question.strip() or f"how do I use the {focus_name}?")
+    q, heard = task_question(question, focus_name)
+    run = runs.new_run(q or f"how do I use the {focus_name}?")
+    if heard is not None:
+        run["heard"] = heard
     try:
         data_url, w, h = await _frame_from(frame, frame_id)
         frames.keep_for_run(run["id"], data_url, w, h)

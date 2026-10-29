@@ -37,8 +37,10 @@ IDENTIFY_SCHEMA = {
 
 IDENTIFY_PROMPT = (
     "This is a photo of equipment in a small store. The user asked: \"{question}\"\n{focus}"
-    "If the question is general and names no task (what is here, what can you see, which one), do not invent a task: "
-    "return an empty steps list, name the object, and leave safety_warning and prep empty.\n"
+    "Only if the question asks purely what is in view (what is this, what can you see, which one) and names nothing to do, "
+    "return an empty steps list, name the object, and leave safety_warning and prep empty. Anything else is a task: "
+    "'how do I use this', 'help me with this', a single word or an unclear phrase all mean 'how do I operate this "
+    "machine', so produce the steps for its main everyday use.\n"
     "Name the object and the ONE part the user must touch first; give that part's bounding box on a 0-1000 grid "
     "(origin top-left, x left-to-right, y top-to-bottom), tight around the part, localized precisely. Report the exact "
     "label text you read on or beside it (empty if none) and whether that label names what the user asked about. "
@@ -61,6 +63,12 @@ IDENTIFY_PROMPT = (
     "appearing) over a small one, and add a final step whose evidence is the outcome the user cares about. For every "
     "step also give bbox: a tight box (0-1000 grid of this photo) around the part that step touches, or around where its "
     "change will show; the camera check looks closely inside that box."
+)
+
+# Appended to IDENTIFY_PROMPT for the retry when the planner returned no steps for a question that is not look-around.
+IDENTIFY_FORCE_LINE = (
+    "\nThe user wants to operate this machine. This IS a task, not a look-around question: the steps list must not be "
+    "empty. If the question is unclear, give the steps for the machine's main everyday use."
 )
 
 VERIFY_SCHEMA = {

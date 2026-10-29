@@ -511,6 +511,7 @@ $("skip").addEventListener("click", () => { stopAutoCheck(); giveUp("skipped by 
 async function startRun(question, focus) {
   if (busy || !question) return;
   if (!focus && GENERAL.test(question)) { $("heard").textContent = `“${question}”`; show("heard", true); return lookAround(); }
+  stopAutoCheck(); run = null;                      // checks start only once this run has steps
   busy = true; runStartedAt = performance.now(); prevStep = -1;
   setTop("think"); setBottom("listen"); $("heard").textContent = `“${question}”`; show("heard", true);
   const t0 = performance.now();
@@ -660,7 +661,11 @@ async function startRecording() {
     }
     mic.classList.add("rec"); micLabel.textContent = "Listening";
     speechSynthesis.cancel();
-    if (!survey) { setTop("listen"); show("heard", false); for (const k in timing) delete timing[k]; footer(); uploadFrameEarly().catch(() => {}); }
+    if (!survey) {
+      if (run && run.status === "guiding") logEvent("loop", "stopped: new question");
+      stopAutoCheck(); run = null; clearOverlay();            // no checks against the old run while a new question is asked
+      setTop("listen"); show("heard", false); for (const k in timing) delete timing[k]; footer(); uploadFrameEarly().catch(() => {});
+    }
   } catch (e) {
     auto.paused = false;
     setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Microphone not available. Type your question instead.";

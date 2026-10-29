@@ -60,7 +60,8 @@ REASONING = {"identify_part": os.environ.get("SHOWME_IDENTIFY_REASONING", "minim
 # VERIFY_HEDGE_S if the first has not answered.
 # Verifier input mode: "single" = one 512 px frame (Day 3 morning); "pair_crop" = before/after close-ups of the step's
 # part (box padded 30%, cut from the 1024 px frame) plus the small whole frame for context (Day 3 evening).
-VERIFY_MODE = os.environ.get("SHOWME_VERIFY_MODE", "pair_crop")
+# Oct 29 night (station): default back to "single"; pair_crop stays behind SHOWME_VERIFY_MODE=pair_crop.
+VERIFY_MODE = os.environ.get("SHOWME_VERIFY_MODE", "single")
 CROP_PAD = 0.30
 CROP_MAX_SIDE = 512
 CONTEXT_MAX_SIDE = 384

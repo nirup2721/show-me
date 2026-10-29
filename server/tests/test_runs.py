@@ -179,3 +179,51 @@ def test_run_persists_and_reloads(monkeypatch):
     run = start(monkeypatch)
     again = runs.load(run["id"])
     assert again["status"] == "guiding" and again["steps"][0]["expected_evidence"] == "a cup on the tray"
+
+
+# ---------- station failures, Oct 29 night: the planner answered with an EMPTY steps list ----------
+# tests/fixtures/planner_empty_steps.json holds the two real answers (object, part, no steps) from runs
+# 20261029-175300-8337 ("How do I use this machine?") and 20261029-221002-e3b5 ("Here").
+import json  # noqa: E402
+
+from showme import api, prompts  # noqa: E402
+
+FIXTURES = json.load(open(Path(__file__).with_name("fixtures") / "planner_empty_steps.json", encoding="utf-8"))
+
+
+def fake_planner_replay(monkeypatch, answer, calls):
+    def spark_json(backend, prompt, data_url, schema, name, **kw):
+        calls.append(prompt)
+        if prompts.IDENTIFY_FORCE_LINE in prompt:
+            forced = dict(answer, steps=[{"instruction": "Pull the pin.", "part": "pin", "expected_evidence": "the pin is out of the handle",
+                                          "bbox": {"x_min": 300, "y_min": 100, "x_max": 500, "y_max": 200}}])
+            return forced, {"backend": backend, "model": "fake", "seconds": 0.1, "usd": 0.003, "usage": {}}
+        return answer, {"backend": backend, "model": "fake", "seconds": 0.1, "usd": 0.003, "usage": {}}
+    monkeypatch.setattr("showme.models.spark_json", spark_json)
+
+
+def test_replay_empty_steps_gets_one_forced_retry_and_steps(monkeypatch):
+    for rid, fx in FIXTURES.items():
+        calls = []
+        fake_planner_replay(monkeypatch, fx["answer"], calls)
+        q, heard = api.task_question(fx["question"])
+        run = runs.new_run(q)
+        tools.run("identify_part", run, frame=FRAME, width=fx["frame_size"][0], height=fx["frame_size"][1])
+        assert run["steps"], rid
+        assert run["identify"]["retried_empty_steps"] is True and run["identify"]["winner"] == "meta_retry"
+        assert set(run["identify"]["raw"]) == {"meta", "meta_retry"}          # raw planner outputs kept for the next replay
+        assert sum(prompts.IDENTIFY_FORCE_LINE in p for p in calls) == 1     # exactly one retry
+
+
+def test_one_word_transcript_is_a_task_question():
+    assert api.task_question("Here") == ("How do I use this machine?", "Here")
+    assert api.task_question("start a brew") == ("start a brew", None)
+    assert api.task_question("Here", focus_name="ATM") == ("Here", None)      # a chosen object already names the task
+
+
+def test_look_around_question_with_no_steps_is_not_retried(monkeypatch):
+    calls = []
+    fake_planner_replay(monkeypatch, FIXTURES["20261029-221002-e3b5"]["answer"], calls)
+    run = runs.new_run("what is this?")
+    tools.run("identify_part", run, frame=FRAME, width=432, height=768)
+    assert run["steps"] == [] and run["identify"]["retried_empty_steps"] is False and len(calls) == 1
