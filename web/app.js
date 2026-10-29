@@ -76,7 +76,12 @@ function speak(text) {
   if (!("speechSynthesis" in window) || !text) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text); u.lang = "en-US"; u.rate = 1.0;
+  // iOS can blank the camera when the audio session switches for speech: nudge the video at start and end.
+  u.onstart = () => { logEvent("speak", "started"); cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
+  u.onend = () => { logEvent("speak", "ended"); cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
+  u.onerror = (e) => { logError("speech", e.error || "error"); cameraAlive(false); };
   speechSynthesis.speak(u);
+  cameraAlive(false);
 }
 
 // ---------- camera ----------
@@ -106,18 +111,26 @@ function attachStream(stream) {
   cam.play().catch(() => {});
   frameSource = "camera";
   const vt = stream.getVideoTracks()[0];
-  if (vt) vt.addEventListener("ended", () => { cameraAlive(true); });
+  if (vt) {
+    vt.addEventListener("ended", () => { logEvent("camera", "track ended"); cameraAlive(true); });
+    vt.addEventListener("mute", () => { logEvent("camera", "track muted"); cam.play().catch(() => {}); });
+    vt.addEventListener("unmute", () => { logEvent("camera", "track unmuted"); mutedSince = 0; cam.play().catch(() => {}); });
+  }
 }
 // "Camera alive" check: iOS pauses or ends the video track when the page speaks, the mic is held, or the app is
 // backgrounded. Every 2 s (and on return to the foreground) resume the element or re-acquire the stream.
-let reacquiring = false;
+let reacquiring = false, mutedSince = 0;
 async function cameraAlive(force) {
   if (frameSource !== "camera" || document.body.dataset.screen === "start" || reacquiring) return;
   const vt = mediaStream && mediaStream.getVideoTracks()[0];
-  const dead = force || !cam.srcObject || !vt || vt.readyState === "ended" || vt.muted && cam.readyState < 2;
+  // A track that stays muted is a black picture even when the element still reports "ready" (iOS after speech or
+  // a mic hold): give it 1.5 s to unmute on its own, then re-acquire.
+  if (vt && vt.muted) { mutedSince = mutedSince || performance.now(); } else mutedSince = 0;
+  const stuckMuted = mutedSince && performance.now() - mutedSince > 1500;
+  const dead = force || !cam.srcObject || !vt || vt.readyState === "ended" || stuckMuted;
   if (dead) {
-    logEvent("camera", `dead (${vt ? vt.readyState : "no track"}), re-acquiring`);
-    reacquiring = true;
+    logEvent("camera", `dead (${vt ? vt.readyState + (vt.muted ? "/muted" : "") : "no track"}), re-acquiring`);
+    reacquiring = true; mutedSince = 0;
     try { if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop()); await startCamera(); } finally { reacquiring = false; }
     return;
   }
@@ -557,7 +570,7 @@ $("next").addEventListener("click", advance);
 $("confirm").addEventListener("click", confirmHuman);
 $("askagain").addEventListener("click", askAgain);
 $("again").addEventListener("click", askAgain);
-$("repeat").addEventListener("click", () => run && speak(run.message));
+$("repeat").addEventListener("click", () => { logEvent("ui", "repeat tapped"); cameraAlive(false); if (run) speak(run.message); });
 
 // ---------- hold to talk ----------
 // Preferred path: raw 16 kHz mono PCM from the Web Audio API, wrapped as WAV on the phone, so the server sends it to
