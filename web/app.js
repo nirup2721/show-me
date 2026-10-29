@@ -79,7 +79,7 @@ function speak(text) {
   // iOS can blank the camera when the audio session switches for speech: nudge the video at start and end.
   u.onstart = () => { logEvent("speak", "started"); cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
   u.onend = () => { logEvent("speak", "ended"); cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
-  u.onerror = (e) => { logError("speech", e.error || "error"); cameraAlive(false); };
+  u.onerror = (e) => { if (e.error !== "canceled" && e.error !== "interrupted") logError("speech", e.error || "error"); cameraAlive(false); };   // our own cancel is not an error
   speechSynthesis.speak(u);
   cameraAlive(false);
 }
@@ -463,6 +463,7 @@ async function autoTick() {
   if (!run || run.status !== "guiding" || run.current_step !== auto.step) { stopAutoCheck(); if (run && run.status === "guiding") startAutoCheck(); return; }
   if (auto.inflight >= CHECK_MAX_INFLIGHT && performance.now() - auto.lastDone > CHECK_TIMEOUT_MS + 2000) auto.inflight = 0;   // recover from lost requests
   if (auto.paused || busy || auto.advancing || auto.inflight >= CHECK_MAX_INFLIGHT) return;
+  if (reacquiring || (frameSource === "camera" && !cam.videoWidth)) return;   // a stream swap is in progress: no frame to judge yet
   if (performance.now() - auto.startedAt > CHECK_GIVE_UP_MS) { stopAutoCheck(); giveUp("I've been watching for a minute and can't confirm it."); return; }
   const seq = ++auto.seq, step = auto.step, rid = run.id;
   auto.inflight++;
