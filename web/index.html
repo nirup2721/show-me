@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=53">
+<link rel="stylesheet" href="style.css?v=54">
 </head>
 <body data-screen="start">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -120,7 +120,15 @@
   </section>
 
   <div id="flash" hidden><svg><use href="#i-check"/></svg></div>
+
+  <!-- debug panel: long-press the footer to open -->
+  <section id="debug" class="panel debug" hidden>
+    <div class="dbg-head"><span>Debug</span><button id="dbgReport" class="secondary small">Report</button><button id="dbgClose" class="secondary small">Close</button></div>
+    <pre id="dbgState"></pre>
+    <div class="dbg-sub">Errors</div><pre id="dbgErrors"></pre>
+    <div class="dbg-sub">Events</div><pre id="dbgEvents"></pre>
+  </section>
 </main>
-<script src="app.js?v=53"></script>
+<script src="app.js?v=54"></script>
 </body>
 </html>

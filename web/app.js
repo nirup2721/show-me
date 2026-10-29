@@ -72,6 +72,7 @@ async function loadDevKey() {
 
 // ---------- speech ----------
 function speak(text) {
+  logEvent("speak", (text || "").slice(0, 60));
   if (!("speechSynthesis" in window) || !text) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text); u.lang = "en-US"; u.rate = 1.0;
@@ -98,6 +99,7 @@ async function startCamera() {
   }
 }
 function attachStream(stream) {
+  logEvent("camera", "stream attached");
   mediaStream = stream;
   stream.getAudioTracks().forEach((t) => { t.enabled = false; });   // muted until the mic is held
   cam.srcObject = new MediaStream(stream.getVideoTracks());
@@ -114,11 +116,12 @@ async function cameraAlive(force) {
   const vt = mediaStream && mediaStream.getVideoTracks()[0];
   const dead = force || !cam.srcObject || !vt || vt.readyState === "ended" || vt.muted && cam.readyState < 2;
   if (dead) {
+    logEvent("camera", `dead (${vt ? vt.readyState : "no track"}), re-acquiring`);
     reacquiring = true;
     try { if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop()); await startCamera(); } finally { reacquiring = false; }
     return;
   }
-  if (cam.paused) cam.play().catch(() => {});
+  if (cam.paused) { logEvent("camera", "video paused, resuming"); cam.play().catch((e) => logError("cam.play", e)); }
 }
 setInterval(() => cameraAlive(false), 2000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cameraAlive(false); });
@@ -406,6 +409,7 @@ function flashPass() {
 }
 
 function render(r, opts = {}) {
+  if (!opts.quiet) logEvent("render", `${r.status} step ${(r.current_step || 0) + 1}${r.display && r.display.step ? ": " + r.display.step.slice(0, 50) : ""}`);
   const passed = run && r.current_step > prevStep && prevStep >= 0 && r.status !== "failed";
   const failed = run && r.status === "guiding" && r.current_step === prevStep && /^Not yet\./.test((r.display || {}).step || "");
   run = r; prevStep = r.current_step;
@@ -432,6 +436,7 @@ const auto = { timer: null, seq: 0, inflight: 0, step: -1, startedAt: 0, paused:
 function startAutoCheck() {
   stopAutoCheck();
   if (!run || run.status !== "guiding") return;
+  logEvent("loop", `start step ${run.current_step + 1}`);
   auto.step = run.current_step; auto.startedAt = performance.now(); auto.lastReason = ""; auto.advancing = false; auto.firstPassAt = 0;
   auto.inflight = 0; auto.lastDone = performance.now();      // a fresh step never inherits a stuck in-flight count
   $("watch").classList.remove("pass"); $("watchLabel").textContent = "Watching…";
@@ -456,7 +461,10 @@ async function autoTick() {
     let out;
     try { out = await api(`/runs/${rid}/check`, form, null, ctl.signal); } finally { clearTimeout(tmo); }
     timing.check = `${((performance.now() - t0) / 1000).toFixed(1)}s`; footer();
-    if (!run || run.id !== rid || run.current_step !== step || auto.step !== step) return;   // stale: step moved on
+    const vv = (out && out.verdict) || {};
+    if (vv.verdict) { dbg.lastVerdict = `${vv.verdict} (seq ${seq}, ${vv.seconds}s${vv.hedged ? ", hedged" : ""})`; dbg.lastVerdictAt = performance.now(); logEvent("check", `seq ${seq} ${vv.verdict} ${timing.check}${out.advanced ? " -> advanced" : ""}`); }
+    else logEvent("check", `seq ${seq} no verdict${out && out.error ? ": " + out.error : ""}`);
+    if (!run || run.id !== rid || run.current_step !== step || auto.step !== step) { logEvent("check", `seq ${seq} dropped (stale)`); return; }   // stale: step moved on
     if (!out.ok) return;
     const v = out.verdict || {};
     if (out.advanced && out.run) {                      // the server reached its two-pass rule and moved on
@@ -476,7 +484,7 @@ async function autoTick() {
       $("feedback").textContent = reason ? firstSentence(reason)[0] : "";
       if (reason && reason !== auto.lastReason) { auto.lastReason = reason; }   // shown, not spoken: the next step is spoken
     }
-  } catch (e) { /* a dropped or timed-out check is fine; the next tick tries again */ }
+  } catch (e) { logError("check", e); }
   finally { auto.inflight = Math.max(0, auto.inflight - 1); auto.lastDone = performance.now(); }
 }
 async function giveUp(why) {
@@ -515,7 +523,7 @@ async function startRun(question, focus) {
     if (r.status === "guiding" && r.id) {
       try { render(await api(`/runs/${r.id}/outline`, new FormData(), "outline"), { quiet: true }); } catch (e) {}
     }
-  } catch (e) { fail(e.message); }
+  } catch (e) { logError("startRun", e); fail(e.message); }
   busy = false;
 }
 async function advance() {           // manual check: the fallback behind Skip / needs_input
@@ -615,6 +623,7 @@ function releaseMic(ms) {
 }
 async function startRecording() {
   if (busy || recorder || pcm) return;
+  logEvent("mic", "hold");
   auto.paused = true;                 // the camera stops judging while the user is talking
   try {
     const ms = await micStream();
@@ -645,6 +654,7 @@ async function startRecording() {
   }
 }
 async function stopRecording() {
+  logEvent("mic", "release");
   auto.paused = false;
   if (pcm) { mic.classList.remove("rec"); micLabel.textContent = "Hold to talk"; const blob = await stopPcm(); sendAudio(blob, "audio/wav"); return; }
   if (recorder && recorder.state === "recording") recorder.stop();
@@ -698,6 +708,66 @@ function demo(state) {
     setTop("survey"); setBottom("listen"); drawOutline();
   }
 }
+
+// ---------- debug panel (long-press the footer) ----------
+// Live state every 500 ms, the last 5 errors, the last 20 events, and a Report button that copies all of it.
+const dbg = { errors: [], events: [], lastVerdict: null, lastVerdictAt: 0, open: false };
+const stamp = () => new Date().toISOString().slice(11, 23);
+function logEvent(kind, detail) {
+  dbg.events.push(`${stamp()} ${kind}${detail ? " " + detail : ""}`);
+  if (dbg.events.length > 20) dbg.events.shift();
+}
+function logError(where, err) {
+  const msg = (err && (err.message || err.reason && err.reason.message)) || String(err);
+  dbg.errors.push(`${stamp()} ${where}: ${msg}`.slice(0, 200));
+  if (dbg.errors.length > 5) dbg.errors.shift();
+  logEvent("error", `${where}: ${msg}`.slice(0, 120));
+}
+window.addEventListener("error", (e) => logError("window", e.error || e.message));
+window.addEventListener("unhandledrejection", (e) => logError("promise", e.reason));
+function trackState(t) { return t ? `${t.readyState}${t.muted ? "/muted" : ""}${t.enabled ? "" : "/disabled"}` : "none"; }
+function loopState() {
+  if (!run || run.status !== "guiding") return "idle";
+  if (!auto.timer) return "stopped";
+  if (auto.paused) return "paused (mic)";
+  if (auto.inflight >= CHECK_MAX_INFLIGHT && performance.now() - auto.lastDone > CHECK_TIMEOUT_MS) return "STALLED";
+  return "watching";
+}
+function debugState() {
+  const vt = mediaStream && mediaStream.getVideoTracks()[0], at = mediaStream && mediaStream.getAudioTracks()[0];
+  const age = dbg.lastVerdictAt ? `${((performance.now() - dbg.lastVerdictAt) / 1000).toFixed(1)}s ago` : "";
+  return [
+    `page      v${document.querySelector('script[src^="app.js"]')?.getAttribute("src").split("v=")[1] || "?"}  ${location.hostname}  ${navigator.userAgent.replace(/Mozilla\/5.0 \(/, "").slice(0, 60)}`,
+    `screen    ${document.body.dataset.screen}  run ${run ? run.id + " " + run.status + " step " + (run.current_step + 1) + "/" + run.steps.length : "none"}`,
+    `camera    track ${trackState(vt)}  video ${cam.paused ? "paused" : "playing"} ready=${cam.readyState} ${cam.videoWidth}x${cam.videoHeight}  source=${frameSource}`,
+    `mic       track ${trackState(at)}  recording=${pcm ? "wav" : recorder ? "compressed" : "no"}`,
+    `loop      ${loopState()}  inflight ${auto.inflight}/${CHECK_MAX_INFLIGHT}  seq ${auto.seq}  step ${auto.step + 1}  since-start ${auto.startedAt ? ((performance.now() - auto.startedAt) / 1000).toFixed(0) + "s" : "-"}`,
+    `verdict   ${dbg.lastVerdict ? dbg.lastVerdict + "  " + age : "none yet"}`,
+    `speech    ${"speechSynthesis" in window ? (speechSynthesis.speaking ? "speaking" : "quiet") : "unsupported"}  online=${navigator.onLine}  visible=${document.visibilityState}`,
+    `timing    ${Object.entries(timing).map(([k, v]) => k + " " + v).join(" · ") || "-"}`,
+  ].join("\n");
+}
+function renderDebug() {
+  if (!dbg.open) return;
+  $("dbgState").textContent = debugState();
+  $("dbgErrors").textContent = dbg.errors.length ? dbg.errors.join("\n") : "none";
+  $("dbgEvents").textContent = dbg.events.slice().reverse().join("\n") || "none";
+}
+function toggleDebug(on) { dbg.open = on == null ? !dbg.open : on; show("debug", dbg.open); renderDebug(); }
+setInterval(renderDebug, 500);
+$("dbgClose").addEventListener("click", () => toggleDebug(false));
+$("dbgReport").addEventListener("click", async () => {
+  const text = `SHOW ME REPORT ${new Date().toISOString()}\n${debugState()}\n\nERRORS\n${dbg.errors.join("\n") || "none"}\n\nEVENTS (newest first)\n${dbg.events.slice().reverse().join("\n") || "none"}`;
+  try { await navigator.clipboard.writeText(text); $("dbgReport").textContent = "Copied"; }
+  catch (e) { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); $("dbgReport").textContent = "Copied"; } catch (e2) { $("dbgReport").textContent = "Copy failed"; } ta.remove(); }
+  setTimeout(() => { $("dbgReport").textContent = "Report"; }, 1500);
+});
+// long-press (600 ms) on the footer opens it
+let pressTimer = null;
+$("foot").addEventListener("pointerdown", () => { pressTimer = setTimeout(() => toggleDebug(true), 600); });
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) $("foot").addEventListener(ev, () => clearTimeout(pressTimer));
+$("foot").style.pointerEvents = "auto";
+if (/debug=1/.test(location.hash)) toggleDebug(true);
 
 // ---------- boot ----------
 (async () => {

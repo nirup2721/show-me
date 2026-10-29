@@ -116,6 +116,15 @@ button:disabled { opacity: .45; }
 .steps li .ck svg { width: 14px; height: 14px; }
 .steps li .by { margin-left: auto; color: var(--dim); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; }
 
+/* debug panel */
+.debug { position: absolute; left: 10px; right: 10px; top: max(48px, calc(env(safe-area-inset-top) + 36px)); bottom: 10px; z-index: 6; overflow: auto; font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text); background: rgba(6,9,13,0.94); }
+.dbg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-family: var(--head); font-weight: 800; font-size: 16px; }
+.dbg-head span { flex: 1; }
+.dbg-head .secondary.small { height: 36px; padding: 0 12px; font-size: 13px; }
+.dbg-sub { margin-top: 10px; color: var(--accent); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.debug pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+.debug pre b { color: var(--text); font-weight: 500; }
+
 /* verifier pass flash */
 #flash { position: absolute; left: 50%; top: 42%; transform: translate(-50%,-50%); width: 96px; height: 96px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; z-index: 4; animation: pop .25s ease-out; }
 #flash svg { width: 52px; height: 52px; }
