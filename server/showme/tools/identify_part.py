@@ -115,7 +115,8 @@ def run(run_record: dict, frame: str, width: int, height: int, focus: dict | Non
     #     machine?" and for the one-word transcript "Here" (the prompt's look-around clause). A task question never
     #     ends without steps: one more Meta call with the force line. Raw planner outputs are kept for replay tests.
     retried = False
-    if not answer["steps"] and not re.search(prompts.GENERAL_QUESTION, run_record["question"], re.I):
+    label_refused = object_class == "breaker panel" and answer.get("label_matches_question") is False
+    if not answer["steps"] and not label_refused and not re.search(prompts.GENERAL_QUESTION, run_record["question"], re.I):
         retried = True
         runs.event(run_record, "empty_steps_retry", object=answer["object_name"])
         a2, m2 = _ask("meta", prompt + prompts.IDENTIFY_FORCE_LINE, frame, run_record["id"])

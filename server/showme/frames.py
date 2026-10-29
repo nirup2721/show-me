@@ -76,9 +76,22 @@ def step_before(run_id: str, step_index: int) -> tuple[str, int, int] | None:
     return get(f"run-{run_id}-step{step_index}")
 
 
+def keep_check(run_id: str, step_index: int, seq: int, raw: bytes, verdict: str) -> bool:
+    """A check frame whose verdict was not a pass, kept as the JPEG the phone sent (station, Oct 29: the slushie handle
+    step failed 7 times with a hand on the lever and we had no frames to tune on). At most CHECK_KEEP_MAX per step."""
+    d = config.DATA_DIR / "checks" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    if sum(1 for _ in d.glob(f"step{step_index}-*.jpg")) >= config.CHECK_KEEP_MAX:
+        return False
+    p = d / f"step{step_index}-{seq:04d}-{verdict}.jpg"
+    p.write_bytes(raw)
+    store.mark_dirty(p)
+    return True
+
+
 def sweep():
     cutoff = time.time() - config.FRAME_TTL_S
-    run_cutoff = time.time() - 4 * config.FRAME_TTL_S   # a run's start and per-step frames live an hour
+    run_cutoff = time.time() - config.RUN_FRAME_TTL_S   # a run's start and per-step frames live a day
     for p in _dir().glob("*.json"):
         try:
             if p.stat().st_mtime < (run_cutoff if p.name.startswith("run-") else cutoff):

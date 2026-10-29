@@ -227,3 +227,52 @@ def test_look_around_question_with_no_steps_is_not_retried(monkeypatch):
     run = runs.new_run("what is this?")
     tools.run("identify_part", run, frame=FRAME, width=432, height=768)
     assert run["steps"] == [] and run["identify"]["retried_empty_steps"] is False and len(calls) == 1
+
+
+# ---------- station, Oct 29 night: slushie handle (hand on the part) and the breaker label rule ----------
+def test_in_progress_is_not_a_failed_try(monkeypatch):
+    run = start(monkeypatch)
+    fake_verifier(monkeypatch, ["in_progress"] * (config.MAX_VERIFY_TRIES + 1) + ["pass"])
+    for _ in range(config.MAX_VERIFY_TRIES + 1):
+        out = advance_step.run(run, FRAME)
+        assert out["status"] == "guiding" and out["message"].startswith("Keep going.")
+    assert run["steps"][0]["tries"] == 0
+    out = advance_step.run(run, FRAME)
+    assert out["status"] == "guiding" and run["current_step"] == 1 and run["steps"][0]["confirmed_by"] == "camera"
+
+
+def test_auto_check_in_progress_breaks_the_pass_streak_only(monkeypatch):
+    run = start(monkeypatch)
+    fake_verifier(monkeypatch, ["pass", "in_progress", "pass", "pass"])
+    for seq in range(1, 4):
+        assert advance_step.check(run, FRAME, seq=seq, auto_advance=True)["advanced"] is False
+    assert advance_step.check(run, FRAME, seq=4, auto_advance=True)["advanced"] is True
+
+
+def test_breaker_label_mismatch_refuses_another_breaker(monkeypatch):
+    calls = []
+
+    def spark_json(backend, prompt, data_url, schema, name, **kw):
+        calls.append(prompt)
+        return ({"object_name": "electrical breaker panel", "part_name": "Canopy light breaker",
+                 "bbox": {"x_min": 100, "y_min": 100, "x_max": 400, "y_max": 400}, "matched_label": "CANOPY LIGHT",
+                 "label_matches_question": False, "safety_warning": "", "prep": "", "steps": []},
+                {"backend": backend, "model": "fake", "seconds": 0.1, "usd": 0.003, "usage": {}})
+    monkeypatch.setattr("showme.models.spark_json", spark_json)
+    run = runs.new_run("the register has no power, what do I do?")
+    tools.run("identify_part", run, frame=FRAME, width=432, height=768)
+    assert run["steps"] == [] and run["identify"]["retried_empty_steps"] is False and len(calls) == 1
+    msg = api.label_block(run)
+    assert msg and "labeled" in msg and "CANOPY LIGHT" in msg
+    # a question that names no load is not blocked by a false label flag
+    run["question"] = "how do I turn on the breaker?"
+    assert api.label_block(run) is None
+
+
+def test_failed_check_frames_are_kept_with_a_cap(monkeypatch):
+    from showme import frames
+    rid = "test-run-keep"
+    for seq in range(config.CHECK_KEEP_MAX + 3):
+        frames.keep_check(rid, 2, seq, b"\xff\xd8jpeg", "fail")
+    kept = list((config.DATA_DIR / "checks" / rid).glob("step2-*.jpg"))
+    assert len(kept) == config.CHECK_KEEP_MAX and kept[0].read_bytes().startswith(b"\xff\xd8")

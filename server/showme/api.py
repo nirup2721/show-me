@@ -12,7 +12,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.6.1"  # bump on every deploy so /health shows which code is live
+VERSION = "0.6.2"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -108,6 +108,18 @@ def task_question(question: str, focus_name: str = "") -> tuple[str, str | None]
     return q, None
 
 
+def label_block(run: dict) -> str | None:
+    """Breaker panels: when the question names what the breaker feeds and no label in the photo matched, refuse to
+    guide to another breaker. Returns the spoken message, or None when the run may go on."""
+    if run.get("object_class") != "breaker panel" or run.get("label_matches_question") is not False:
+        return None
+    if not _re.search(prompts.NAMED_LOAD, run.get("question", ""), _re.I):
+        return None
+    seen = run.get("matched_label") or ""
+    return ("I don't see a breaker labeled for that" + (f"; I can read {seen}" if seen else "")
+            + ". Move closer so I can read the labels, then ask again.")
+
+
 async def _frame_from(frame: UploadFile | None, frame_id: str):
     stored = frames.get(frame_id) if frame_id else None
     if stored:
@@ -164,7 +176,12 @@ async def start_run(question: str = Form(...), frame: UploadFile | None = File(N
         label = f", labeled {run['matched_label']}" if run["matched_label"] and run.get("label_matches_question") else ""
         obj = f"{run['object_name']}{label}. Start with the {run['part_name']}."
         x1, y1, x2, y2 = run["bbox_px"]
-        if max(x2 - x1, y2 - y1) < config.MIN_PART_PX:
+        blocked = label_block(run)
+        if blocked:
+            runs.event(run, "label_mismatch", labels=run.get("matched_label"))
+            runs.set_status(run, "failed")
+            runs.set_display(run, warning=warning, object_=f"{run['object_name']}.", step=blocked)
+        elif max(x2 - x1, y2 - y1) < config.MIN_PART_PX:
             run["outline"] = {"kind": "too_far", "box": [x1, y1, x2, y2], "long_side_px": max(x2 - x1, y2 - y1)}
             runs.set_status(run, "needs_input")
             runs.set_display(run, warning=warning, object_=obj,
@@ -252,12 +269,18 @@ async def check(run_id: str, frame: UploadFile = File(...), seq: int = Form(0), 
         raise HTTPException(404, "no such run")
     try:
         # Check frames arrive at up to 1024 px so the part close-up is sharp; the context view is shrunk server-side.
-        data_url, w, h = models.frame_from_bytes(await frame.read(), max_side=1024)
+        raw = await frame.read()
+        data_url, w, h = models.frame_from_bytes(raw, max_side=1024)
         before = frames.step_before(run_id, run["current_step"])
         judged = await run_in_threadpool(advance_mod.judge, run, data_url, before[0] if before else None)
         if judged is None:
             return {"ok": False, "status": run["status"], "message": run.get("message", "")}
         step_index, verdict = judged
+        if verdict.get("verdict") != "pass":
+            try:
+                frames.keep_check(run_id, step_index, int(seq), raw, verdict.get("verdict") or "none")
+            except Exception:
+                pass
 
         def record():
             with runs.lock(run_id):

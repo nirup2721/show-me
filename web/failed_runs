@@ -1,0 +1,78 @@
+{
+ "id": "20261029-220609-ab69",
+ "created": "2026-10-29T22:06:09",
+ "updated": "2026-10-29T22:06:14",
+ "status": "failed",
+ "question": "analyze this breaker.",
+ "object_name": "breaker panel",
+ "object_class": "breaker panel",
+ "part_name": "Main breaker handle",
+ "matched_label": "MAIN",
+ "safety_warning": "",
+ "frame_size": [
+  432,
+  768
+ ],
+ "identify": {
+  "chosen_backend": "meta",
+  "chosen_model": "muse-spark-1.3",
+  "seconds": 2.5,
+  "hedged": false,
+  "winner": "meta",
+  "waited_s": 2.5,
+  "answers": {
+   "meta": {
+    "object_name": "breaker panel",
+    "part_name": "Main breaker handle",
+    "seconds": 2.5
+   },
+   "baseten": {
+    "object_name": "electrical breaker panel",
+    "part_name": "main breaker handle",
+    "seconds": 5.17,
+    "late": true
+   }
+  }
+ },
+ "steps": [],
+ "current_step": 0,
+ "message": "breaker panel. Start with the Main breaker handle. I couldn't work out the steps.",
+ "display": {
+  "warning": "",
+  "object": "breaker panel. Start with the Main breaker handle.",
+  "step": "I couldn't work out the steps."
+ },
+ "outline": null,
+ "events": [
+  {
+   "ts": "2026-10-29T22:06:12",
+   "type": "identified",
+   "backend": "meta",
+   "winner": "meta",
+   "hedged": false,
+   "waited_s": 2.5,
+   "object": "breaker panel",
+   "part": "Main breaker handle"
+  },
+  {
+   "ts": "2026-10-29T22:06:12",
+   "type": "status",
+   "status": "failed"
+  },
+  {
+   "ts": "2026-10-29T22:06:14",
+   "type": "late_answer",
+   "backend": "baseten",
+   "seconds": 5.17
+  }
+ ],
+ "cost_usd": 0.003032,
+ "label_matches_question": false,
+ "prep": "",
+ "bbox_px": [
+  194,
+  80,
+  272,
+  153
+ ]
+}

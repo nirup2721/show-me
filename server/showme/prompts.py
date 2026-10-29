@@ -44,7 +44,11 @@ IDENTIFY_PROMPT = (
     "Name the object and the ONE part the user must touch first; give that part's bounding box on a 0-1000 grid "
     "(origin top-left, x left-to-right, y top-to-bottom), tight around the part, localized precisely. Report the exact "
     "label text you read on or beside it (empty if none) and whether that label names what the user asked about. "
-    "If no label names it, pick the closest part anyway but set label_matches_question to false. "
+    "If the question names what a breaker, switch or valve feeds (register, ATM, cooler, lights, pump), the part is the "
+    "one whose printed or handwritten label names that thing, every step touches that labeled part, and matched_label is "
+    "that label's text. Never guide to a differently labeled breaker. If no label in the photo names it, do not choose "
+    "another one: set label_matches_question to false, put the labels you could read in matched_label, and return an "
+    "empty steps list. If the question names no particular thing, label_matches_question is true. "
     "Give a safety warning of at most 20 words if this is electrical or fuel equipment, else an empty string. "
     "Everything you write is read aloud by a phone, so keep part_name to 4 words and every sentence short.\n"
     "Then list the steps, at most {max_steps}, one short sentence each (at most 10 words; every step and every "
@@ -74,7 +78,7 @@ IDENTIFY_FORCE_LINE = (
 VERIFY_SCHEMA = {
     "type": "object",
     "properties": {
-        "verdict": {"type": "string", "enum": ["pass", "fail", "cannot_tell"]},
+        "verdict": {"type": "string", "enum": ["pass", "fail", "cannot_tell", "in_progress"]},
         "evidence_seen": {"type": "string", "description": "One sentence: what the photo actually shows about the named thing."},
         "reason": {"type": "string"},
     },
@@ -86,7 +90,7 @@ VERIFY_PAIR_SCHEMA = {
     "type": "object",
     "properties": {
         "change": {"type": "string", "description": "One sentence: what is different between the BEFORE and AFTER close-ups of the part, or 'no visible change'."},
-        "verdict": {"type": "string", "enum": ["pass", "fail", "cannot_tell"]},
+        "verdict": {"type": "string", "enum": ["pass", "fail", "cannot_tell", "in_progress"]},
         "evidence_seen": {"type": "string", "description": "One sentence: the state of the named thing in the AFTER image."},
         "reason": {"type": "string"},
     },
@@ -106,7 +110,8 @@ VERIFY_PAIR_PROMPT = (
     "Then describe what changed between image 1 and image 2 (a lever, handle, button, light, screen or object moving, "
     "appearing or changing state), or 'no visible change'; use the change only as supporting evidence for a state that "
     "is hard to read, never as the reason to fail a step whose done state is already visible. A hand or finger does not "
-    "by itself mean not done. For switches and handles, read the handle's position against the printed marks and its "
+    "by itself mean not done. Answer in_progress when a hand is on the part and the action is clearly under way (gripping or pulling a handle, pressing a button, pouring) but the done state is not visible yet; in_progress is not a failure. "
+    "For switches and handles, read the handle's position against the printed marks and its "
     "neighbours in both images; do not guess from a small offset. Nobody's word counts as evidence."
 )
 
@@ -119,7 +124,8 @@ VERIFY_PROMPT = (
     "relevant thing in the not-done state. Answer cannot_tell if the relevant thing is not in the photo, is blurry, is "
     "covered by a hand or object, or its state cannot be judged from this angle. A hand or finger in the photo does not by "
     "itself mean not done: if the expected evidence is clearly visible anyway, answer pass; if the hand hides the very thing "
-    "you need to see, answer cannot_tell. For switches, handles and levers, do not guess from a small offset: compare the "
+    "you need to see, answer cannot_tell. Answer in_progress when a hand is on the part and the action is clearly under way (gripping or pulling a handle, pressing a button, pouring) but the done state is not visible yet; in_progress is not a failure. "
+    "For switches, handles and levers, do not guess from a small offset: compare the "
     "handle to its neighbours and to the printed ON/OFF marks, and if you cannot clearly see which side it sits on, answer "
     "cannot_tell rather than pass. Nobody's word counts as evidence; only the photo. "
     "First describe what you see of the named thing in one sentence, then give the verdict."
@@ -163,5 +169,10 @@ GENERAL_QUESTION = (
 )
 
 # Words the voice model would otherwise mishear in a noisy store. Hints only.
+# A question that names what a breaker feeds. With a breaker panel, a planner answer whose label does not match such a
+# question is refused instead of guiding to another breaker (station, Oct 29).
+NAMED_LOAD = (r"\b(register|registers|atm|cooler|coolers|freezer|fridge|pump|pumps|light|lights|sign|canopy|ice|coffee|slush|slushie|"
+              r"compressor|heater|hvac|cash|pos|dispenser|tv|camera|cameras|kitchen|fryer|grill|microwave|oven|outlet|outlets)\b")
+
 VOICE_KEYWORDS = ["breaker", "breaker panel", "register", "ATM", "cooler", "pilot light", "reset button", "fuel pump",
                   "nozzle", "fire extinguisher", "pin", "gauge", "coffee machine", "filter", "brew", "ice machine"]

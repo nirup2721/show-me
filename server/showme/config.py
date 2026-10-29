@@ -72,6 +72,8 @@ FRAME_TTL_S = 900      # uploaded frames waiting for their transcript are delete
 MAX_STEPS = 6          # per task (was 8; fewer, shorter steps mean fewer output tokens and a faster first answer)
 SURVEY_MAX = 6         # "look around": at most this many objects per frame, one SAM call each
 MAX_VERIFY_TRIES = 3   # per step before needs_input
+CHECK_KEEP_MAX = 12    # check frames kept per step for verdicts that were not a pass (real data for verifier tuning)
+RUN_FRAME_TTL_S = 24 * 3600   # a run's start and per-step 'before' frames live a day, so store runs can be replayed
 CONSISTENCY_RUNS = 3   # offline test: same frame, same verdict, 3 of 3, before a step may appear in the video
 
 # Working data lives on fast local disk; store.py mirrors it to the Modal Volume (SHOWME_VOLUME) in the background.

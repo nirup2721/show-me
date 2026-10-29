@@ -71,17 +71,45 @@ async function loadDevKey() {
 }
 
 // ---------- speech ----------
+// ---------- audio session (iOS) ----------
+// iOS mutes the camera track when the audio session changes for speech (station, Oct 29: black view on every spoken
+// step and on the repeat button). Approach (c): hold the page's audio session open from the Start tap, as
+// play-and-record where navigator.audioSession exists (iOS 17+) plus an inaudible AudioContext tone that never stops,
+// so speech does not switch the session and interrupt capture. Everything is logged for the debug Report.
+const aud = { ctx: null, state: "off", type: "n/a" };
+function initAudioSession() {
+  try { if (navigator.audioSession) { navigator.audioSession.type = "play-and-record"; aud.type = navigator.audioSession.type; } else aud.type = "no api"; }
+  catch (e) { aud.type = "error"; logError("audioSession", e); }
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { aud.state = "unsupported"; return; }
+    aud.ctx = new AC();
+    const osc = aud.ctx.createOscillator(), g = aud.ctx.createGain();
+    osc.frequency.value = 30; g.gain.value = 0.0005;              // below hearing, but the session stays open
+    osc.connect(g); g.connect(aud.ctx.destination); osc.start();
+    aud.ctx.onstatechange = () => { aud.state = aud.ctx.state; logEvent("audio", `context ${aud.state}`); };
+    aud.ctx.resume().then(() => { aud.state = aud.ctx.state; logEvent("audio", `session ${aud.state}, type ${aud.type}`); });
+  } catch (e) { aud.state = "error"; logError("audio", e); }
+}
+function keepAudioAlive() { if (aud.ctx && aud.ctx.state !== "running") aud.ctx.resume().catch(() => {}); }
+
+// Approach (a): nothing touches the camera stream from the moment speech is requested until 300 ms after it starts.
+const spk = { guardUntil: 0 };
+function speechGuardActive() { return performance.now() < spk.guardUntil; }
 function speak(text) {
   logEvent("speak", (text || "").slice(0, 60));
   if (!("speechSynthesis" in window) || !text) return;
   speechSynthesis.cancel();
+  keepAudioAlive();
   const u = new SpeechSynthesisUtterance(text); u.lang = "en-US"; u.rate = 1.0;
-  // iOS can blank the camera when the audio session switches for speech: nudge the video at start and end.
-  u.onstart = () => { logEvent("speak", "started"); cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
-  u.onend = () => { logEvent("speak", "ended"); cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
-  u.onerror = (e) => { if (e.error !== "canceled" && e.error !== "interrupted") logError("speech", e.error || "error"); cameraAlive(false); };   // our own cancel is not an error
+  spk.guardUntil = performance.now() + 1500;                      // until onstart (at most 1.5 s)
+  u.onstart = () => {
+    logEvent("speak", "started"); spk.guardUntil = performance.now() + 300;
+    setTimeout(() => cameraAlive(false), 350); setTimeout(() => cameraAlive(false), 1000);
+  };
+  u.onend = () => { logEvent("speak", "ended"); spk.guardUntil = 0; cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
+  u.onerror = (e) => { if (e.error !== "canceled" && e.error !== "interrupted") logError("speech", e.error || "error"); spk.guardUntil = 0; cameraAlive(false); };   // our own cancel is not an error
   speechSynthesis.speak(u);
-  cameraAlive(false);
 }
 
 // ---------- camera ----------
@@ -122,6 +150,7 @@ function attachStream(stream) {
 let reacquiring = false, mutedSince = 0;
 async function cameraAlive(force) {
   if (frameSource !== "camera" || document.body.dataset.screen === "start" || reacquiring) return;
+  if (speechGuardActive() && !force) return;                      // (a) hands off around speech start
   const vt = mediaStream && mediaStream.getVideoTracks()[0];
   // A track that stays muted is a black picture even when the element still reports "ready" (iOS after speech or
   // a mic hold): give it 1.5 s to unmute on its own, then re-acquire.
@@ -132,12 +161,14 @@ async function cameraAlive(force) {
     logEvent("camera", `dead (${vt ? vt.readyState + (vt.muted ? "/muted" : "") : "no track"}), re-acquiring`);
     reacquiring = true; mutedSince = 0;
     try { if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop()); await startCamera(); } finally { reacquiring = false; }
+    const nvt = mediaStream && mediaStream.getVideoTracks()[0];
+    logEvent("camera", `re-acquired: track ${trackState(nvt)}`);
     return;
   }
   if (cam.paused) { logEvent("camera", "video paused, resuming"); cam.play().catch((e) => logError("cam.play", e)); }
 }
 setInterval(() => cameraAlive(false), 2000);
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cameraAlive(false); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { keepAudioAlive(); cameraAlive(false); } });
 function showStill(src) { still.src = src; still.hidden = false; cam.hidden = true; frameSource = "still"; }
 function loadDevImage() {
   const m = location.hash.match(/img=([^&]+)/);
@@ -152,12 +183,58 @@ $("file").addEventListener("change", (e) => {
   setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Photo loaded. Hold the mic or type your question.";
 });
 
+// Approach (b): a black picture is detected by sampling the frame (16x16 luminance). A black frame is never sent
+// to the server; the camera is re-acquired up to 3 times until a real picture comes back, each try logged.
+const blackCanvas = document.createElement("canvas"); blackCanvas.width = 16; blackCanvas.height = 16;
+function blackness(src) {
+  try {
+    const x = blackCanvas.getContext("2d", { willReadFrequently: true });
+    x.drawImage(src, 0, 0, 16, 16);
+    const d = x.getImageData(0, 0, 16, 16).data;
+    let sum = 0, max = 0;
+    for (let i = 0; i < d.length; i += 4) { const l = (d[i] * 3 + d[i + 1] * 6 + d[i + 2]) / 10; sum += l; if (l > max) max = l; }
+    const mean = sum / (d.length / 4);
+    return { black: max < 24 && mean < 10, mean: Math.round(mean), max: Math.round(max) };
+  } catch (e) { return { black: false, mean: -1, max: -1 }; }
+}
+const blk = { count: 0, recovering: false, last: "none" };
+async function recoverBlack(where) {
+  blk.count++;
+  if (blk.recovering) return false;
+  blk.recovering = true;
+  try {
+    for (let i = 1; i <= 3; i++) {
+      while (speechGuardActive()) await new Promise((r) => setTimeout(r, 100));
+      logEvent("camera", `black frame (${where}): re-acquire ${i}/3`);
+      await cameraAlive(true);
+      await new Promise((r) => setTimeout(r, 700));
+      const b = blackness(cam);
+      logEvent("camera", `re-acquire ${i}: ${b.black ? "still black" : "picture back"} (mean ${b.mean}, max ${b.max})`);
+      if (!b.black) { blk.last = `picture back after ${i}`; return true; }
+    }
+    blk.last = "still black after 3 tries";
+    return false;
+  } finally { blk.recovering = false; }
+}
+async function captureGoodFrame(longSide = FRAME_LONG_SIDE) {
+  try { return await captureFrame(longSide); }
+  catch (e) {
+    if (!e.black) throw e;
+    await recoverBlack("capture");
+    try { return await captureFrame(longSide); }
+    catch (e2) { if (e2.black) throw new Error("The camera picture is black. Switch to another app and back, then try again."); throw e2; }
+  }
+}
 function captureFrame(longSide = FRAME_LONG_SIDE) {
   return new Promise((resolve, reject) => {
     const src = frameSource === "camera" ? cam : still;
     const sw = frameSource === "camera" ? cam.videoWidth : still.naturalWidth;
     const sh = frameSource === "camera" ? cam.videoHeight : still.naturalHeight;
     if (!sw || !sh) return reject(new Error("No picture yet. Point the camera at the machine."));
+    if (frameSource === "camera") {
+      const b = blackness(src);
+      if (b.black) { const e = new Error("black frame"); e.black = true; e.stats = b; return reject(e); }
+    }
     const scale = Math.min(1, longSide / Math.max(sw, sh));
     const c = document.createElement("canvas");
     c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
@@ -288,7 +365,7 @@ async function lookAround() {
     let up = null; try { up = pendingFrame ? await pendingFrame : null; } catch (e) { up = null; }
     pendingFrame = null;
     if (up && up.frame_id) form.append("frame_id", up.frame_id);
-    else { const f = await captureFrame(); timing.frame = `${f.w}x${f.h} ${Math.round(f.blob.size / 1024)} KB`; form.append("frame", f.blob, "frame.jpg"); }
+    else { const f = await captureGoodFrame(); timing.frame = `${f.w}x${f.h} ${Math.round(f.blob.size / 1024)} KB`; form.append("frame", f.blob, "frame.jpg"); }
     const s = await api("/survey", form, "look");
     timing.cost = `$${(s.usd || 0).toFixed(3)}`; footer();
     survey = { objects: s.objects || [], frame_size: s.frame_size, frame_id: s.frame_id, chosen: null };
@@ -359,7 +436,7 @@ async function api(path, form, name, signal) {
 let pendingFrame = null;
 function uploadFrameEarly() {
   pendingFrame = (async () => {
-    const f = await captureFrame();
+    const f = await captureGoodFrame();
     timing.frame = `${f.w}x${f.h} ${Math.round(f.blob.size / 1024)} KB`; footer();
     const form = new FormData(); form.append("frame", f.blob, "frame.jpg");
     return api("/frames", form, "upload");
@@ -463,12 +540,14 @@ async function autoTick() {
   if (!run || run.status !== "guiding" || run.current_step !== auto.step) { stopAutoCheck(); if (run && run.status === "guiding") startAutoCheck(); return; }
   if (auto.inflight >= CHECK_MAX_INFLIGHT && performance.now() - auto.lastDone > CHECK_TIMEOUT_MS + 2000) auto.inflight = 0;   // recover from lost requests
   if (auto.paused || busy || auto.advancing || auto.inflight >= CHECK_MAX_INFLIGHT) return;
-  if (reacquiring || (frameSource === "camera" && !cam.videoWidth)) return;   // a stream swap is in progress: no frame to judge yet
+  if (reacquiring || blk.recovering || speechGuardActive() || (frameSource === "camera" && !cam.videoWidth)) return;   // stream swap, black recovery or speech start: no frame to judge yet
   if (performance.now() - auto.startedAt > CHECK_GIVE_UP_MS) { stopAutoCheck(); giveUp("I've been watching for a minute and can't confirm it."); return; }
   const seq = ++auto.seq, step = auto.step, rid = run.id;
   auto.inflight++;
   try {
-    const f = await captureFrame(CHECK_LONG_SIDE);
+    let f;
+    try { f = await captureFrame(CHECK_LONG_SIDE); }
+    catch (e) { if (e.black) { logEvent("check", `seq ${seq} black frame, skipped`); recoverBlack("check"); return; } throw e; }
     const form = new FormData(); form.append("frame", f.blob, "check.jpg"); form.append("seq", String(seq)); form.append("auto_advance", "1");
     const t0 = performance.now();
     const ctl = new AbortController(); const tmo = setTimeout(() => ctl.abort(), CHECK_TIMEOUT_MS);
@@ -526,7 +605,7 @@ async function startRun(question, focus) {
       let up = null; try { up = pendingFrame ? await pendingFrame : null; } catch (e) { up = null; }
       pendingFrame = null;
       if (up && up.frame_id) form.append("frame_id", up.frame_id);
-      else { const f = await captureFrame(); form.append("frame", f.blob, "frame.jpg"); }
+      else { const f = await captureGoodFrame(); form.append("frame", f.blob, "frame.jpg"); }
     }
     survey = null; overlay.style.pointerEvents = "none";
     const r = await api("/runs", form, "identify");
@@ -546,7 +625,7 @@ async function advance() {           // manual check: the fallback behind Skip /
   stopAutoCheck();
   busy = true; $("next").disabled = true; setTop("think");
   try {
-    const f = await captureFrame(CHECK_LONG_SIDE);   // same size as auto-check: the verifier was tuned on it
+    const f = await captureGoodFrame(CHECK_LONG_SIDE);   // same size as auto-check: the verifier was tuned on it
     const form = new FormData(); form.append("frame", f.blob, "frame.jpg");
     const r = await api(`/runs/${run.id}/advance`, form, "check");
     render(r); if (r.status === "guiding") startAutoCheck();
@@ -640,6 +719,7 @@ async function startRecording() {
   if (busy || recorder || pcm) return;
   logEvent("mic", "hold");
   auto.paused = true;                 // the camera stops judging while the user is talking
+  keepAudioAlive();
   try {
     const ms = await micStream();
     const stream = ms.stream;
@@ -697,6 +777,7 @@ $("question").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ask
 // ---------- start ----------
 $("start").addEventListener("click", async () => {
   screen("live");
+  initAudioSession();                                 // (c) from the user's tap, before the camera
   const ok = loadDevImage() || await startCamera();
   setTop("idle"); setBottom("listen");
   if (!ok) $("t-idle").querySelector(".t-sub").textContent = "No camera here. Use the photo button, or type a question.";
@@ -762,7 +843,8 @@ function debugState() {
     `mic       track ${trackState(at)}  recording=${pcm ? "wav" : recorder ? "compressed" : "no"}`,
     `loop      ${loopState()}  inflight ${auto.inflight}/${CHECK_MAX_INFLIGHT}  seq ${auto.seq}  step ${auto.step + 1}  since-start ${auto.startedAt ? ((performance.now() - auto.startedAt) / 1000).toFixed(0) + "s" : "-"}`,
     `verdict   ${dbg.lastVerdict ? dbg.lastVerdict + "  " + age : "none yet"}`,
-    `speech    ${"speechSynthesis" in window ? (speechSynthesis.speaking ? "speaking" : "quiet") : "unsupported"}  online=${navigator.onLine}  visible=${document.visibilityState}`,
+    `speech    ${"speechSynthesis" in window ? (speechSynthesis.speaking ? "speaking" : "quiet") : "unsupported"}  guard=${speechGuardActive() ? "on" : "off"}  online=${navigator.onLine}  visible=${document.visibilityState}`,
+    `audio     session ${aud.state} type ${aud.type}  black frames ${blk.count} (${blk.last})${frameSource === "camera" && cam.videoWidth ? "  now mean " + blackness(cam).mean : ""}`,
     `timing    ${Object.entries(timing).map(([k, v]) => k + " " + v).join(" · ") || "-"}`,
   ].join("\n");
 }

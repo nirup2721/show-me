@@ -2,6 +2,8 @@
 
 Given a fresh frame, verify_step judges the current step. pass -> step confirmed by camera, next step is spoken.
 fail -> feedback is spoken, same step again. cannot_tell, or MAX_VERIFY_TRIES fails -> needs_input.
+in_progress (a hand on the part, action under way) -> same step, not counted as a try (station, Oct 29: the slushie
+handle step failed 7 times while the owner's hand was on the lever).
 """
 import time
 
@@ -99,6 +101,10 @@ def run(run_record: dict, frame: str) -> dict:
         step["confirmed_by"] = "camera"
         return _next(run_record, f"Good. {verdict['evidence_seen']}")
 
+    if verdict["verdict"] == "in_progress":          # hand on the part, action under way: not a failed try
+        step["tries"] -= 1
+        runs.set_status(run_record, "guiding", f"Keep going. {step['instruction']}")
+        return {"ok": True, "status": "guiding", "verdict": verdict, "message": run_record["message"]}
     if verdict["verdict"] == "fail" and step["tries"] < config.MAX_VERIFY_TRIES:
         runs.set_status(run_record, "guiding", f"Not yet. {verdict['reason']} {step['instruction']}")
         return {"ok": True, "status": "guiding", "verdict": verdict, "message": run_record["message"]}
