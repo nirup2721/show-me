@@ -18,8 +18,12 @@ def run(run_record: dict, frame: str) -> dict:
         run_record["outline"] = {"kind": "too_far", "box": [x1, y1, x2, y2], "long_side_px": long_side}
         runs.event(run_record, "too_far", long_side_px=long_side)
         return run_record["outline"]
+    bx1, by1, bx2, by2 = x1, y1, x2, y2
+    if config.SAM_BOX_INSET:
+        dx, dy = int((x2 - x1) * config.SAM_BOX_INSET), int((y2 - y1) * config.SAM_BOX_INSET)
+        bx1, by1, bx2, by2 = x1 + dx, y1 + dy, x2 - dx, y2 - dy
     try:
-        sam = models.sam_outline((x1, y1, x2, y2), w, h, frame, run_record["id"])
+        sam = models.sam_outline((bx1, by1, bx2, by2), w, h, frame, run_record["id"])
     except Exception as e:
         sam = None
         runs.event(run_record, "sam_error", error=str(e)[:200])

@@ -35,7 +35,12 @@ HARD_STOP_USD = float(os.environ.get("SHOWME_HARD_STOP_USD", "100"))
 # Frames are downsized to this longest side before any model sees them. Every coordinate is in this frame.
 FRAME_MAX_SIDE = 1024
 # Arm's-reach rule: a part box narrower than this (long side, px) means "move closer", no SAM, no step.
-MIN_PART_PX = 60
+# Day 3: phones send portrait 432x768 frames, where a card slot at arm's length is ~50 px; 60 refused it. 40 keeps
+# the Day-1 "Wrong" case (31 px from 3 m) out while letting close shots of small parts through.
+MIN_PART_PX = 40
+# Shrink Spark's box inward by this fraction per side before it becomes SAM's prompt (Day 3: at 0 the mask on the
+# coffee screen spilled onto the bezel; see LEARNINGS). Only for the part outline, not for look-around.
+SAM_BOX_INSET = float(os.environ.get("SHOWME_SAM_INSET", "0.08"))
 
 BASETEN_WAIT_S = 20    # breaker panel only: how long to wait for the open-weights answer after Meta has answered
 # Speed over cost (owner, Oct 28 evening): if Meta's identify has not answered after HEDGE_AFTER_S, fire a second

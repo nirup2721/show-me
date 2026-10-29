@@ -450,33 +450,73 @@ $("again").addEventListener("click", askAgain);
 $("repeat").addEventListener("click", () => run && speak(run.message));
 
 // ---------- hold to talk ----------
-async function startRecording() {
-  if (busy || recorder) return;
+// Preferred path: raw 16 kHz mono PCM from the Web Audio API, wrapped as WAV on the phone, so the server sends it to
+// the voice model as-is (no ffmpeg). Fallback: MediaRecorder (webm/m4a), converted on the server.
+let pcm = null;   // {ctx, stream, node, chunks: Float32Array[]} while a WAV recording is running
+
+function wavFromFloat32(chunks, rate) {
+  const n = chunks.reduce((a, c) => a + c.length, 0);
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, n * 2, true);
+  let o = 44;
+  for (const c of chunks) for (let i = 0; i < c.length; i++, o += 2) { const s = Math.max(-1, Math.min(1, c[i])); v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true); }
+  return new Blob([buf], { type: "audio/wav" });
+}
+async function startPcm(stream) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) throw new Error("no AudioContext");
+  const ctx = new AC({ sampleRate: 16000 });
+  if (ctx.sampleRate !== 16000) { await ctx.close(); throw new Error("16 kHz not supported"); }
+  const src = ctx.createMediaStreamSource(stream);
+  const node = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  src.connect(node); node.connect(ctx.destination);
+  pcm = { ctx, stream, node, chunks };
+}
+async function stopPcm() {
+  const p = pcm; pcm = null;
+  p.node.disconnect(); p.stream.getTracks().forEach((t) => t.stop()); await p.ctx.close();
+  return wavFromFloat32(p.chunks, 16000);
+}
+
+async function sendAudio(blob, type) {
+  if (blob.size < 2000) { setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Too short. Hold the button while you speak."; return; }
+  busy = true; setTop("think");
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
-    recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-    chunks = [];
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      const type = recorder.mimeType || "audio/webm";
-      recorder = null; mic.classList.remove("rec"); micLabel.textContent = "Hold to talk";
-      const blob = new Blob(chunks, { type });
-      if (blob.size < 2000) { setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Too short. Hold the button while you speak."; return; }
-      busy = true; setTop("think");
-      try {
-        const form = new FormData();
-        form.append("audio", blob, "q." + (type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm"));
-        timing.audio = `${Math.round(blob.size / 1024)} KB`; footer();
-        const t = await api("/transcribe", form, "transcribe");
-        busy = false;
-        if (!t.text) { setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "I didn't catch that. Try again."; return; }
-        if (survey && surveyAnswer(t.text)) return;
-        await startRun(t.text);
-      } catch (e) { busy = false; fail(e.message); }
-    };
-    recorder.start();
+    const form = new FormData();
+    form.append("audio", blob, "q." + (type.includes("wav") ? "wav" : type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm"));
+    timing.audio = `${Math.round(blob.size / 1024)} KB ${type.includes("wav") ? "wav" : "compressed"}`; footer();
+    const t = await api("/transcribe", form, "transcribe");
+    busy = false;
+    if (!t.text) { setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "I didn't catch that. Try again."; return; }
+    if (survey && surveyAnswer(t.text)) return;
+    await startRun(t.text);
+  } catch (e) { busy = false; fail(e.message); }
+}
+
+async function startRecording() {
+  if (busy || recorder || pcm) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true } });
+    try {
+      await startPcm(stream);                       // WAV path
+    } catch (e) {                                   // fallback: MediaRecorder
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunks = [];
+      recorder.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const type = recorder.mimeType || "audio/webm";
+        recorder = null; mic.classList.remove("rec"); micLabel.textContent = "Hold to talk";
+        sendAudio(new Blob(chunks, { type }), type);
+      };
+      recorder.start();
+    }
     mic.classList.add("rec"); micLabel.textContent = "Listening";
     speechSynthesis.cancel();
     if (!survey) { setTop("listen"); show("heard", false); for (const k in timing) delete timing[k]; footer(); uploadFrameEarly().catch(() => {}); }
@@ -485,7 +525,10 @@ async function startRecording() {
     show("typed", true);
   }
 }
-function stopRecording() { if (recorder && recorder.state === "recording") recorder.stop(); }
+async function stopRecording() {
+  if (pcm) { mic.classList.remove("rec"); micLabel.textContent = "Hold to talk"; const blob = await stopPcm(); sendAudio(blob, "audio/wav"); return; }
+  if (recorder && recorder.state === "recording") recorder.stop();
+}
 mic.addEventListener("pointerdown", (e) => { e.preventDefault(); startRecording(); });
 for (const ev of ["pointerup", "pointercancel", "pointerleave"]) mic.addEventListener(ev, stopRecording);
 mic.addEventListener("contextmenu", (e) => e.preventDefault());
