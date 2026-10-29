@@ -1,6 +1,7 @@
 """HTTP API the phone calls. Thin: each endpoint loads a run, calls a tool, saves the run."""
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool   # blocking model calls must not sit on the event loop
 
 from . import config, costs, frames, models, prompts, runs, tools
 from .tools import advance_step as advance_mod
@@ -11,7 +12,7 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.4.1"  # bump on every deploy so /health shows which code is live
+VERSION = "0.5.2"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
@@ -79,7 +80,7 @@ async def transcribe(audio: UploadFile = File(...)):
     _budget_guard()
     data = await audio.read()
     try:
-        return tools.run("transcribe", None, audio=data, content_type=audio.content_type or "audio/wav")
+        return await run_in_threadpool(tools.run, "transcribe", None, audio=data, content_type=audio.content_type or "audio/wav")
     except Exception as e:
         raise HTTPException(502, str(e)[:300])
 
@@ -114,7 +115,7 @@ async def survey(frame: UploadFile | None = File(None), frame_id: str = Form("")
     data_url, w, h = await _frame_from(frame, frame_id)
     fid = frame_id or frames.put_data_url(data_url, w, h)
     try:
-        result = tools.run("survey_frame", None, frame=data_url, width=w, height=h)
+        result = await run_in_threadpool(tools.run, "survey_frame", None, frame=data_url, width=w, height=h)
     except costs.BudgetExhausted as e:
         raise HTTPException(503, str(e))
     except Exception as e:
@@ -145,7 +146,7 @@ async def start_run(question: str = Form(...), frame: UploadFile | None = File(N
             except ValueError:
                 box = None
             focus = {"name": focus_name.strip(), "box": box if box and len(box) == 4 else None}
-        tools.run("identify_part", run, frame=data_url, width=w, height=h, focus=focus)
+        await run_in_threadpool(tools.run, "identify_part", run, frame=data_url, width=w, height=h, focus=focus)
         warning = " ".join(x for x in (run.get("safety_warning", ""), run.get("prep", "")) if x)
         label = f", labeled {run['matched_label']}" if run["matched_label"] and run.get("label_matches_question") else ""
         obj = f"{run['object_name']}{label}. Start with the {run['part_name']}."
@@ -202,15 +203,15 @@ async def advance(run_id: str, frame: UploadFile = File(...)):
         if run["status"] == "needs_input" and run.get("outline", {}) and run["outline"].get("kind") == "too_far":
             # The user moved closer: re-identify on this frame, then proceed as a fresh start of step 1.
             frames.keep_for_run(run["id"], data_url, w, h)
-            tools.run("identify_part", run, frame=data_url, width=w, height=h)
-            outline = tools.run("outline_part", run, frame=data_url)
+            await run_in_threadpool(tools.run, "identify_part", run, frame=data_url, width=w, height=h)
+            outline = await run_in_threadpool(tools.run, "outline_part", run, frame=data_url)
             if outline["kind"] == "too_far":
                 runs.set_status(run, "needs_input", "Still too far. Get within arm's reach of the part and tap Done.")
             else:
                 runs.set_status(run, "guiding", f"Step 1. {run['steps'][0]['instruction']}")
             run["message"] = run["display"]["step"]  # after re-identify, speak only the step line
         else:
-            tools.run("advance_step", run, frame=data_url)
+            await run_in_threadpool(tools.run, "advance_step", run, frame=data_url)
             if run["status"] == "guiding" and run.get("outline") is None:
                 # Outline the next step's part on this frame if Spark gave us a box for it; we reuse the identify box
                 # only for step 1, so later steps show the verifier's feedback without an outline unless re-identified.
@@ -222,6 +223,51 @@ async def advance(run_id: str, frame: UploadFile = File(...)):
         runs.event(run, "error", error=str(e)[:300])
     runs.save(run)
     return runs.public_view(run)
+
+
+@app.post("/runs/{run_id}/check")
+async def check(run_id: str, frame: UploadFile = File(...), seq: int = Form(0), auto_advance: int = Form(0)):
+    """Auto-check: judge a fresh frame against the current step and record the verdict. With auto_advance=1 the
+    server also moves to the next step when its own consecutive-pass rule is met, and returns the run.
+    Verification runs in parallel across requests; the record step runs under the run's lock on a fresh copy."""
+    _budget_guard()
+    run = runs.load(run_id)
+    if not run:
+        raise HTTPException(404, "no such run")
+    try:
+        data_url, w, h = models.frame_from_bytes(await frame.read())
+        judged = await run_in_threadpool(advance_mod.judge, run, data_url)
+        if judged is None:
+            return {"ok": False, "status": run["status"], "message": run.get("message", "")}
+        step_index, verdict = judged
+
+        def record():
+            with runs.lock(run_id):
+                fresh = runs.load(run_id)
+                out = advance_mod.record_check(fresh, step_index, verdict, seq, auto_advance=bool(auto_advance))
+                runs.save(fresh)
+                if out.get("advanced"):
+                    out["run"] = runs.public_view(fresh)
+                return out
+        return await run_in_threadpool(record)
+    except costs.BudgetExhausted as e:
+        with runs.lock(run_id):
+            fresh = runs.load(run_id) or run
+            runs.set_status(fresh, "failed", str(e)); runs.save(fresh)
+        return {"ok": False, "status": "failed"}
+    except Exception as e:
+        return {"ok": False, "status": run["status"], "error": str(e)[:200]}
+
+
+@app.post("/runs/{run_id}/advance-from-checks")
+def advance_from_checks(run_id: str):
+    """Move to the next step on the strength of the recorded auto-check passes (server-side rule)."""
+    run = runs.load(run_id)
+    if not run:
+        raise HTTPException(404, "no such run")
+    out = advance_mod.advance_from_checks(run)
+    runs.save(run)
+    return runs.public_view(run) | {"advanced": bool(out.get("ok"))}
 
 
 @app.post("/runs/{run_id}/confirm")

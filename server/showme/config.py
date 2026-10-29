@@ -12,11 +12,11 @@ MODELS = {
 SAM_MODEL = "sam-3.1"
 VOICE_MODEL = "muse-voice-transcribe-1.0"
 
-# Which backend answers which role, by object class. "*" is the default.
-# Decided on Day 1 from the 8-photo comparison: Muse Spark Open (Baseten) draws tighter boxes on the
-# breaker panel; Muse Spark 1.3 (Meta) is better on everything else and always runs the verifier.
+# Which backend answers which role. Day 3 (owner): the user never waits on Baseten. Meta Spark 1.3 drives every
+# run; Muse Spark Open (Baseten) is run in parallel on every identify and its answer is recorded in the run file
+# when it lands (see identify_part._record_late), which is what the README's open-weights claim rests on.
 ROUTES = {
-    "identify_part": {"breaker panel": "baseten", "*": "meta"},
+    "identify_part": {"*": "meta"},
     "verify_step": {"*": "meta"},
 }
 
@@ -50,7 +50,17 @@ HEDGE_AFTER_S = 3.0
 IDENTIFY_DEADLINE_S = 30.0
 # Reasoning effort per role. identify at "minimal" was 2.5-2.8 s vs 4-5 s at "low" on Day 2 with the same parts and
 # concrete evidence sentences; the verifier stays at "low" (owner: verifier untouched).
-REASONING = {"identify_part": os.environ.get("SHOWME_IDENTIFY_REASONING", "minimal"), "verify_step": "low"}
+REASONING = {"identify_part": os.environ.get("SHOWME_IDENTIFY_REASONING", "minimal"),
+             # Day 3 matrix on the before/after pairs: minimal + 512 px frames kept every coffee verdict right and gave
+             # honest cannot_tell on the panel (minimal + 768 px produced two false passes), at 1.0-1.8 s vs 1.8-2.5 s.
+             # The 512 px frame is therefore part of the verifier's safety, not just its speed: the page must send it.
+             "verify_step": os.environ.get("SHOWME_VERIFY_REASONING", "minimal")}
+# Auto-check (Day 3): the phone sends a frame every ~2 s to /check; a step advances when the last CHECK_PASSES
+# verdicts on it are passes within CHECK_WINDOW_S. The verifier is hedged like identify: a second call after
+# VERIFY_HEDGE_S if the first has not answered.
+CHECK_PASSES = 2
+CHECK_WINDOW_S = 10.0
+VERIFY_HEDGE_S = 2.0
 FRAME_TTL_S = 900      # uploaded frames waiting for their transcript are deleted after 15 minutes
 MAX_STEPS = 6          # per task (was 8; fewer, shorter steps mean fewer output tokens and a faster first answer)
 SURVEY_MAX = 6         # "look around": at most this many objects per frame, one SAM call each

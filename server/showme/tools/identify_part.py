@@ -29,6 +29,22 @@ def _ask(backend: str, prompt: str, data_url: str, run_id: str):
         return None, {"backend": backend, "error": str(e)[:200]}
 
 
+def _record_late(run_id: str, key: str, fut):
+    """A backend answer that arrived after the run moved on: store its summary in the run file."""
+    try:
+        a, m = fut.result()
+        summary = ({"object_name": a["object_name"], "part_name": a["part_name"], "seconds": m.get("seconds"), "late": True}
+                   if a else {"error": (m or {}).get("error"), "late": True})
+        rec = runs.load(run_id)
+        if rec is None:
+            return
+        rec.setdefault("identify", {}).setdefault("answers", {})[key] = summary
+        runs.event(rec, "late_answer", backend=key, seconds=summary.get("seconds"))
+        runs.save(rec)
+    except Exception:
+        pass
+
+
 def _box_px(bbox: dict, w: int, h: int) -> list[int]:
     c = lambda v: max(0, min(1000, int(v)))
     return [c(bbox["x_min"]) * w // 1000, c(bbox["y_min"]) * h // 1000, c(bbox["x_max"]) * w // 1000, c(bbox["y_max"]) * h // 1000]
@@ -80,23 +96,17 @@ def run(run_record: dict, frame: str, width: int, height: int, focus: dict | Non
     answer, meta = results[winner]
     source_backend = "meta" if winner.startswith("meta") else "baseten"
 
-    # 3. Routing by object class (from the winner's answer). The breaker panel prefers the open-weights answer.
+    # 3. Never wait on Baseten (Day 3: the panel's first answer took ~10 s). The first good answer drives the run.
+    #    Muse Spark Open's answer, when it lands, is written into the run file by _record_late so the open-weights
+    #    claim is backed by the logs without the user waiting for it.
     object_class = config.object_class_of(answer["object_name"])
-    chosen = config.route("identify_part", object_class)
-    if chosen == "baseten" and source_backend == "meta" and "baseten" in futures:
-        if "baseten" not in results:
-            try:
-                results["baseten"] = futures["baseten"].result(timeout=config.BASETEN_WAIT_S)
-            except Exception as e:
-                results["baseten"] = (None, {"backend": "baseten", "error": f"timed out or failed: {str(e)[:100]}"})
-        if results["baseten"][0] is not None:
-            answer, meta = results["baseten"]
-            source_backend = "baseten"
     chosen = source_backend
-    for k in futures:
+    run_id = run_record["id"]
+    for k, f in futures.items():
         if k not in results:
-            results[k] = (None, {"backend": "meta" if k.startswith("meta") else k, "error": "still running when the run moved on; not awaited"})
-    pool.shutdown(wait=False)  # losers finish on their own and log their cost
+            results[k] = (None, {"backend": "meta" if k.startswith("meta") else k, "error": "still running when the run moved on; recorded when it lands"})
+            f.add_done_callback(lambda fut, k=k: _record_late(run_id, k, fut))
+    pool.shutdown(wait=False)  # losers finish on their own, log their cost, and land in the run file
     meta_answer, meta_meta = answer, meta  # names kept for the summary below
 
     for b, (a, m) in results.items():

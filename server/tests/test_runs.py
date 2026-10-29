@@ -103,7 +103,7 @@ def test_routing_table():
     os.environ.pop("BASETEN_API_KEY", None)
     assert config.route("identify_part", "breaker panel") == "meta"  # no key -> fallback
     os.environ["BASETEN_API_KEY"] = "x"
-    assert config.route("identify_part", "breaker panel") == "baseten"
+    assert config.route("identify_part", "breaker panel") == "meta"   # Day 3: the user never waits on Baseten
     assert config.route("identify_part", "*") == "meta"
 
 
@@ -149,6 +149,30 @@ def test_survey_lists_objects_and_outlines_each(monkeypatch):
     assert [o["name"] for o in out["objects"]] == ["coffee machine", "breaker panel"]   # the 2 px speck is dropped
     assert all(o["outline"]["kind"] == "mask" for o in out["objects"])
     assert abs(out["usd"] - (0.004 + 2 * config.SAM_PER_IMAGE)) < 1e-9
+
+
+def test_auto_check_needs_two_consecutive_passes(monkeypatch):
+    run = start(monkeypatch)
+    fake_verifier(monkeypatch, ["pass", "fail", "pass", "pass"])
+    assert advance_step.check(run, FRAME, 1)["can_advance"] is False
+    assert advance_step.check(run, FRAME, 2)["pass_streak"] == 0
+    assert advance_step.advance_from_checks(run)["ok"] is False and run["current_step"] == 0
+    advance_step.check(run, FRAME, 3)
+    out = advance_step.check(run, FRAME, 4)
+    assert out["pass_streak"] == 2 and out["can_advance"] is True
+    assert advance_step.advance_from_checks(run)["ok"] is True
+    assert run["current_step"] == 1 and run["steps"][0]["confirmed_by"] == "camera"
+    assert advance_step.advance_from_checks(run)["ok"] is False   # no checks yet on step 2
+
+
+def test_stale_check_is_dropped_after_the_step_moved_on(monkeypatch):
+    run = start(monkeypatch)
+    fake_verifier(monkeypatch, ["pass", "pass", "pass"])
+    j1 = advance_step.judge(run, FRAME)            # judged while on step 1
+    advance_step.check(run, FRAME, 2); advance_step.check(run, FRAME, 3, auto_advance=True)
+    assert run["current_step"] == 1
+    out = advance_step.record_check(run, j1[0], j1[1], 1, auto_advance=True)   # lands late
+    assert out.get("stale") is True and run["current_step"] == 1 and run["steps"][1]["verdicts"] == []
 
 
 def test_run_persists_and_reloads(monkeypatch):

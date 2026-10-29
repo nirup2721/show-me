@@ -97,6 +97,11 @@ button:disabled { opacity: .45; }
 .mic .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent); opacity: 0; pointer-events: none; }
 .mic.rec .r1 { animation: ring 1.4s infinite; } .mic.rec .r2 { animation: ring 1.4s .5s infinite; }
 @keyframes ring { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(1.6); opacity: 0; } }
+.watchrow { display: flex; align-items: center; gap: 10px; }
+.watch { flex: 1; height: 52px; border-radius: 16px; border: 1px solid rgba(79,227,255,0.35); background: rgba(6,9,13,0.55); display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; font-size: 16px; color: var(--muted); }
+.watch .dot { animation: blink 1.6s infinite; }
+.watch.pass { color: var(--accent); border-color: var(--accent); }
+.secondary.small { height: 52px; padding: 0 20px; font-size: 15px; }
 #foot { min-height: 1em; font-size: 12px; }
 #foot span:empty { display: none; }
 

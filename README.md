@@ -26,13 +26,13 @@ Two backends are used. Every call below is routed by the server; the phone never
 
 | Call | What it does | Breaker panel | All other objects |
 |---|---|---|---|
-| `identify_part` | Names the object and the part to touch first, returns the part's bounding box, the step list with the expected visual evidence for each step, and any label it reads | **Muse Spark Open** (`meta-models/muse-spark-open-1026`, open weights, served by Baseten) | Muse Spark 1.3, Meta Model API |
+| `identify_part` | Names the object and the part to touch first, returns the part's bounding box, the step list with the expected visual evidence for each step, and any label it reads | Muse Spark 1.3 answers; **Muse Spark Open** (`meta-models/muse-spark-open-1026`, open weights, served by Baseten) runs on the same frame in parallel and its answer is recorded in the run file when it lands | same |
 | `verify_step` | Independent check of a fresh camera frame against the step's expected evidence. Runs inside the advance-step tool so the main agent cannot skip it | Muse Spark 1.3, Meta Model API | Muse Spark 1.3, Meta Model API |
 | `outline_part` | Turns the box into a tight outline | SAM 3.1, Meta Model API | SAM 3.1, Meta Model API |
 | `transcribe` | Speech to text, push-to-talk | Muse Voice Transcribe 1.0, Meta Model API | same |
 | Speak | Text to speech | On-device (Web Speech API) | same |
 
-So the open-weights claim is one precise sentence: **Muse Spark Open identifies the breaker; everything else runs on the Meta Model API.** The first frame of every task goes to both backends at once; if Muse Spark 1.3 reports a breaker panel, the app uses Muse Spark Open's answer for that frame, otherwise it uses Muse Spark 1.3's. The verifier is always Muse Spark 1.3, so on the panel the model that identifies the part is not the model that checks the step.
+So the open-weights claim is one precise sentence: **every identify call is also run on Muse Spark Open, and its answer is kept in the run log; the Meta Model API answer is what the user hears.** The first frame of every task goes to both backends at once. Muse Spark 1.3 answers first on average and drives the run; the user never waits for Baseten (on Day 3 that wait cost the breaker panel about 10 s). Muse Spark Open's answer is written into the same run file when it arrives, so the two can be compared after the fact on every run. The verifier is always Muse Spark 1.3.
 
 ### Why that split: the Day-1 comparison (Oct 27, 2026)
 

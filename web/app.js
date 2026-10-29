@@ -6,6 +6,8 @@
 
 const BACKEND = "https://nirup2721--show-me-web.us-east.modal.run";
 const FRAME_LONG_SIDE = 768;
+const CHECK_LONG_SIDE = 512;      // auto-check frames are smaller: the verifier judges one named thing, not the scene
+const CHECK_EVERY_MS = 1000, CHECK_MAX_INFLIGHT = 3, CHECK_GIVE_UP_MS = 60000;
 const ACCENT = "#4FE3FF";
 
 // ---------- thinking state: sweep, reticle, readout that fills from live timings ----------
@@ -42,7 +44,8 @@ function setBottom(mode) {           // "listen" | "step" | "need" | null
   show("bottom", !!mode);
   show("c-listen", mode === "listen");
   show("c-step", mode === "step" || mode === "need");
-  show("next", mode === "step" || mode === "need");
+  show("next", mode === "need");                       // manual check only as the fallback behind Skip
+  show("watchRow", mode === "step");                    // guiding: the camera watches on its own
   $("nextLabel").textContent = mode === "need" ? "Check again" : "Done, check it";
   show("confirm", mode === "need");
   show("confirmNote", mode === "need");
@@ -102,13 +105,13 @@ $("file").addEventListener("change", (e) => {
   setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Photo loaded. Hold the mic or type your question.";
 });
 
-function captureFrame() {
+function captureFrame(longSide = FRAME_LONG_SIDE) {
   return new Promise((resolve, reject) => {
     const src = frameSource === "camera" ? cam : still;
     const sw = frameSource === "camera" ? cam.videoWidth : still.naturalWidth;
     const sh = frameSource === "camera" ? cam.videoHeight : still.naturalHeight;
     if (!sw || !sh) return reject(new Error("No picture yet. Point the camera at the machine."));
-    const scale = Math.min(1, FRAME_LONG_SIDE / Math.max(sw, sh));
+    const scale = Math.min(1, longSide / Math.max(sw, sh));
     const c = document.createElement("canvas");
     c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
     c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
@@ -381,12 +384,67 @@ function render(r, opts = {}) {
   speak(r.message);
   if (r.status === "done") { renderDone(r); drawOutline(); return; }
   screen("live"); show("s-done", false);
+  if (r.status !== "guiding") stopAutoCheck();
   if (r.status === "needs_input") renderNeed(r);
   else if (r.status === "failed") { $("stepLine").textContent = r.message || "Something went wrong."; $("feedback").textContent = ""; setTop("step"); setBottom("listen"); }
   else renderStep(r, passed);
   if (failed) { const p = $("top"); p.classList.remove("shake"); void p.offsetWidth; p.classList.add("shake"); }
   if (passed) { setTimeout(flashPass, 50); } else drawOutline();
 }
+
+// ---------- auto-check: the camera watches the step, no button ----------
+// Every CHECK_EVERY_MS a small frame goes to /check. Up to CHECK_MAX_INFLIGHT requests overlap. The server records
+// each verdict; when it reports two consecutive passes the page asks the server to advance, and the server itself
+// re-checks that rule. Results that arrive for an older step, or after a pass already advanced, are dropped.
+const auto = { timer: null, seq: 0, inflight: 0, step: -1, startedAt: 0, paused: false, lastReason: "", advancing: false };
+function startAutoCheck() {
+  stopAutoCheck();
+  if (!run || run.status !== "guiding") return;
+  auto.step = run.current_step; auto.startedAt = performance.now(); auto.lastReason = ""; auto.advancing = false; auto.firstPassAt = 0;
+  $("watch").classList.remove("pass"); $("watchLabel").textContent = "Watching…";
+  auto.timer = setInterval(autoTick, CHECK_EVERY_MS);
+  setTimeout(autoTick, 400);   // first look soon after the step is spoken
+}
+function stopAutoCheck() { if (auto.timer) clearInterval(auto.timer); auto.timer = null; }
+async function autoTick() {
+  if (!run || run.status !== "guiding" || run.current_step !== auto.step) { stopAutoCheck(); return; }
+  if (auto.paused || busy || auto.advancing || auto.inflight >= CHECK_MAX_INFLIGHT) return;
+  if (performance.now() - auto.startedAt > CHECK_GIVE_UP_MS) { stopAutoCheck(); giveUp("I've been watching for a minute and can't confirm it."); return; }
+  const seq = ++auto.seq, step = auto.step, rid = run.id;
+  auto.inflight++;
+  try {
+    const f = await captureFrame(CHECK_LONG_SIDE);
+    const form = new FormData(); form.append("frame", f.blob, "check.jpg"); form.append("seq", String(seq)); form.append("auto_advance", "1");
+    const t0 = performance.now();
+    const out = await api(`/runs/${rid}/check`, form);
+    timing.check = `${((performance.now() - t0) / 1000).toFixed(1)}s`; footer();
+    if (!run || run.id !== rid || run.current_step !== step || auto.step !== step) return;   // stale: step moved on
+    if (!out.ok) return;
+    const v = out.verdict || {};
+    if (out.advanced && out.run) {                      // the server reached its two-pass rule and moved on
+      auto.advancing = true;
+      timing.advance = auto.firstPassAt ? `${((performance.now() - auto.firstPassAt) / 1000).toFixed(1)}s after first pass` : "on first pass";
+      render(out.run); if (out.run.status === "guiding") startAutoCheck();
+      return;
+    }
+    if (v.verdict === "pass") {
+      $("watch").classList.add("pass"); $("watchLabel").textContent = "Looks done, confirming…";
+      if (!auto.firstPassAt) auto.firstPassAt = performance.now();
+      setTimeout(autoTick, 0);                            // confirm right away instead of waiting for the next tick
+    } else {
+      $("watch").classList.remove("pass"); $("watchLabel").textContent = v.verdict === "fail" ? "Not yet" : "Watching…";
+      const reason = v.verdict === "fail" ? (v.reason || "") : "";
+      $("feedback").textContent = reason ? firstSentence(reason)[0] : "";
+      if (reason && reason !== auto.lastReason) { auto.lastReason = reason; }   // shown, not spoken: the next step is spoken
+    }
+  } catch (e) { /* a dropped check is fine; the next tick tries again */ }
+  finally { auto.inflight--; }
+}
+async function giveUp(why) {
+  if (!run) return;
+  try { const form = new FormData(); form.append("reason", why); render(await api(`/runs/${run.id}/help`, form)); } catch (e) {}
+}
+$("skip").addEventListener("click", () => { stopAutoCheck(); giveUp("skipped by the user"); });
 
 // ---------- actions ----------
 async function startRun(question, focus) {
@@ -413,30 +471,35 @@ async function startRun(question, focus) {
     if (r.status === "survey_needed") { busy = false; return lookAround(); }
     timing["first words"] = `${((performance.now() - t0) / 1000).toFixed(1)}s`; footer();
     render(r);
+    busy = false;
+    if (r.status === "guiding") startAutoCheck();
     if (r.status === "guiding" && r.id) {
       try { render(await api(`/runs/${r.id}/outline`, new FormData(), "outline"), { quiet: true }); } catch (e) {}
     }
   } catch (e) { fail(e.message); }
   busy = false;
 }
-async function advance() {
+async function advance() {           // manual check: the fallback behind Skip / needs_input
   if (busy || !run) return;
+  stopAutoCheck();
   busy = true; $("next").disabled = true; setTop("think");
   try {
-    const f = await captureFrame();
+    const f = await captureFrame(CHECK_LONG_SIDE);   // same size as auto-check: the verifier was tuned on it
     const form = new FormData(); form.append("frame", f.blob, "frame.jpg");
-    render(await api(`/runs/${run.id}/advance`, form, "check"));
+    const r = await api(`/runs/${run.id}/advance`, form, "check");
+    render(r); if (r.status === "guiding") startAutoCheck();
   } catch (e) { fail(e.message); }
   $("next").disabled = false; busy = false;
 }
 async function confirmHuman() {
   if (busy || !run) return;
   busy = true;
-  try { render(await api(`/runs/${run.id}/confirm`, new FormData())); } catch (e) { fail(e.message); }
+  try { const r = await api(`/runs/${run.id}/confirm`, new FormData()); render(r); if (r.status === "guiding") startAutoCheck(); } catch (e) { fail(e.message); }
   busy = false;
 }
 function fail(msg) { $("warnText").textContent = ""; $("warn").classList.add("empty"); $("stepLine").textContent = msg; $("feedback").textContent = ""; $("segments").innerHTML = ""; setTop("step"); setBottom("listen"); }
 function askAgain() {
+  stopAutoCheck();
   run = null; prevStep = -1; survey = null; overlay.style.pointerEvents = "none"; speechSynthesis.cancel();
   for (const k in timing) delete timing[k]; footer(); $("run").textContent = "";
   show("s-done", false); screen("live"); drawOutline();
@@ -500,6 +563,7 @@ async function sendAudio(blob, type) {
 
 async function startRecording() {
   if (busy || recorder || pcm) return;
+  auto.paused = true;                 // the camera stops judging while the user is talking
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true } });
     try {
@@ -521,11 +585,13 @@ async function startRecording() {
     speechSynthesis.cancel();
     if (!survey) { setTop("listen"); show("heard", false); for (const k in timing) delete timing[k]; footer(); uploadFrameEarly().catch(() => {}); }
   } catch (e) {
+    auto.paused = false;
     setTop("idle"); $("t-idle").querySelector(".t-sub").textContent = "Microphone not available. Type your question instead.";
     show("typed", true);
   }
 }
 async function stopRecording() {
+  auto.paused = false;
   if (pcm) { mic.classList.remove("rec"); micLabel.textContent = "Hold to talk"; const blob = await stopPcm(); sendAudio(blob, "audio/wav"); return; }
   if (recorder && recorder.state === "recording") recorder.stop();
 }

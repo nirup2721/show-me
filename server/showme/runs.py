@@ -20,6 +20,18 @@ from . import config
 
 STATUSES = ("identifying", "guiding", "verifying", "needs_input", "done", "failed")
 
+# One lock per run: concurrent auto-checks must not load-modify-save over each other (lost update, seen Day 3).
+import threading
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def lock(run_id: str) -> threading.Lock:
+    with _locks_guard:
+        if run_id not in _locks:
+            _locks[run_id] = threading.Lock()
+        return _locks[run_id]
+
 
 def _dir() -> Path:
     d = config.DATA_DIR / "runs"

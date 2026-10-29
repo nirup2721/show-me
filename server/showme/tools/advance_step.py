@@ -3,6 +3,8 @@
 Given a fresh frame, verify_step judges the current step. pass -> step confirmed by camera, next step is spoken.
 fail -> feedback is spoken, same step again. cannot_tell, or MAX_VERIFY_TRIES fails -> needs_input.
 """
+import time
+
 from .. import config, runs
 from ..verification import verify_step
 
@@ -17,6 +19,63 @@ def _speak_step(run_record: dict) -> str:
     return f"Step {n}. {step['instruction']}"
 
 
+def judge(run_record: dict, frame: str) -> tuple[int, dict] | None:
+    """Auto-check, part 1 (no state change, may run in parallel): verify the frame against the current step.
+    Returns (step_index, verdict) or None if the run is not being guided."""
+    step = runs.current_step(run_record)
+    if step is None or run_record["status"] != "guiding":
+        return None
+    return run_record["current_step"], verify_step(step, frame, run_record["id"])
+
+
+def record_check(run_record: dict, step_index: int, verdict: dict, seq: int = 0, auto_advance: bool = False) -> dict:
+    """Auto-check, part 2 (under the run's lock, on a freshly loaded run): record the verdict and apply the
+    consecutive-pass rule. A verdict for a step the run has already left is dropped as stale."""
+    if run_record["status"] != "guiding" or run_record["current_step"] != step_index:
+        return {"ok": False, "stale": True, "status": run_record["status"], "step": run_record["current_step"]}
+    step = run_record["steps"][step_index]
+    runs.add_cost(run_record, verdict.get("usd", 0.0))
+    rec = {k: verdict.get(k) for k in ("verdict", "evidence_seen", "reason", "backend", "seconds", "hedged")}
+    rec["ts"] = time.time(); rec["seq"] = seq; rec["auto"] = True
+    step["verdicts"].append(rec)
+    runs.event(run_record, "checked", step=step_index, verdict=verdict["verdict"], seq=seq)
+    recent = [v for v in step["verdicts"] if v.get("auto") and time.time() - v.get("ts", 0) <= config.CHECK_WINDOW_S]
+    streak = 0
+    for v in reversed(recent):
+        if v["verdict"] == "pass": streak += 1
+        else: break
+    out = {"ok": True, "status": run_record["status"], "verdict": rec, "pass_streak": streak,
+           "can_advance": streak >= config.CHECK_PASSES, "step": step_index, "advanced": False}
+    if auto_advance and out["can_advance"]:
+        res = advance_from_checks(run_record)   # the rule is re-applied here, not trusted from the page
+        out["advanced"] = bool(res.get("ok"))
+    return out
+
+
+def check(run_record: dict, frame: str, seq: int = 0, auto_advance: bool = False) -> dict:
+    """Both parts on one in-memory run (tests and single-threaded use). The API uses judge + record_check."""
+    j = judge(run_record, frame)
+    if j is None:
+        return {"ok": False, "status": run_record["status"], "message": run_record.get("message", "")}
+    return record_check(run_record, j[0], j[1], seq, auto_advance)
+
+
+def advance_from_checks(run_record: dict) -> dict:
+    """Advance only if the last CHECK_PASSES auto-check verdicts on the current step are passes within the window.
+    The page cannot pass a step on its own: the verdicts it relies on were produced and stored here."""
+    step = runs.current_step(run_record)
+    if step is None or run_record["status"] != "guiding":
+        return {"ok": False, "status": run_record["status"], "message": run_record.get("message", "")}
+    recent = [v for v in step["verdicts"] if v.get("auto") and time.time() - v.get("ts", 0) <= config.CHECK_WINDOW_S]
+    tail = recent[-config.CHECK_PASSES:]
+    if len(tail) < config.CHECK_PASSES or any(v["verdict"] != "pass" for v in tail):
+        return {"ok": False, "status": run_record["status"], "message": "not enough consecutive passes yet", "pass_streak": len([v for v in tail if v['verdict'] == 'pass'])}
+    step["status"] = "confirmed"
+    step["confirmed_by"] = "camera"
+    runs.event(run_record, "advanced_from_checks", step=run_record["current_step"], passes=[v["seq"] for v in tail])
+    return _next(run_record, "Good.")
+
+
 def run(run_record: dict, frame: str) -> dict:
     step = runs.current_step(run_record)
     if step is None or run_record["status"] not in ("guiding", "needs_input"):
@@ -26,7 +85,7 @@ def run(run_record: dict, frame: str) -> dict:
     verdict = verify_step(step, frame, run_record["id"])
     runs.add_cost(run_record, verdict["usd"])
     step["tries"] += 1
-    step["verdicts"].append({k: verdict[k] for k in ("verdict", "evidence_seen", "reason", "backend", "seconds")})
+    step["verdicts"].append({k: verdict.get(k) for k in ("verdict", "evidence_seen", "reason", "backend", "seconds", "hedged")} | {"ts": time.time()})
     runs.event(run_record, "verified", step=run_record["current_step"], verdict=verdict["verdict"], seen=verdict["evidence_seen"])
 
     if verdict["verdict"] == "pass":
