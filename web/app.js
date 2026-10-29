@@ -87,11 +87,22 @@ function initAudioSession() {
     const osc = aud.ctx.createOscillator(), g = aud.ctx.createGain();
     osc.frequency.value = 30; g.gain.value = 0.0005;              // below hearing, but the session stays open
     osc.connect(g); g.connect(aud.ctx.destination); osc.start();
-    aud.ctx.onstatechange = () => { aud.state = aud.ctx.state; logEvent("audio", `context ${aud.state}`); };
+    // iOS suspends this context when speech ends, and that suspension blanks the camera for ~0.7 s (station run
+    // 20261029-230727-bc0a: "speak ended -> track muted x2 -> context suspended -> unmuted"). Resume at once, every time.
+    aud.ctx.onstatechange = () => {
+      aud.state = aud.ctx.state; logEvent("audio", `context ${aud.state}`);
+      if (aud.ctx.state === "suspended" || aud.ctx.state === "interrupted") {
+        const t0 = performance.now();
+        aud.ctx.resume().then(() => logEvent("audio", `resumed after suspend in ${Math.round(performance.now() - t0)} ms`)).catch((e) => logError("audio.resume", e));
+      }
+    };
     aud.ctx.resume().then(() => { aud.state = aud.ctx.state; logEvent("audio", `session ${aud.state}, type ${aud.type}`); });
   } catch (e) { aud.state = "error"; logError("audio", e); }
 }
-function keepAudioAlive() { if (aud.ctx && aud.ctx.state !== "running") aud.ctx.resume().catch(() => {}); }
+function keepAudioAlive(why) {
+  if (!aud.ctx || aud.ctx.state === "running") return;
+  aud.ctx.resume().then(() => { if (why) logEvent("audio", `resumed (${why})`); }).catch(() => {});
+}
 
 // Approach (a): nothing touches the camera stream from the moment speech is requested until 300 ms after it starts.
 const spk = { guardUntil: 0 };
@@ -104,10 +115,14 @@ function speak(text) {
   const u = new SpeechSynthesisUtterance(text); u.lang = "en-US"; u.rate = 1.0;
   spk.guardUntil = performance.now() + 1500;                      // until onstart (at most 1.5 s)
   u.onstart = () => {
-    logEvent("speak", "started"); spk.guardUntil = performance.now() + 300;
+    logEvent("speak", "started"); spk.guardUntil = performance.now() + 300; keepAudioAlive("speech start");
     setTimeout(() => cameraAlive(false), 350); setTimeout(() => cameraAlive(false), 1000);
   };
-  u.onend = () => { logEvent("speak", "ended"); spk.guardUntil = 0; cameraAlive(false); setTimeout(() => cameraAlive(false), 700); };
+  u.onend = () => {
+    logEvent("speak", "ended"); spk.guardUntil = 0;
+    keepAudioAlive("speech end"); setTimeout(() => keepAudioAlive("speech end +150"), 150); setTimeout(() => keepAudioAlive("speech end +500"), 500);
+    cameraAlive(false); setTimeout(() => cameraAlive(false), 700);
+  };
   u.onerror = (e) => { if (e.error !== "canceled" && e.error !== "interrupted") logError("speech", e.error || "error"); spk.guardUntil = 0; cameraAlive(false); };   // our own cancel is not an error
   speechSynthesis.speak(u);
 }
