@@ -79,18 +79,49 @@ function speak(text) {
 }
 
 // ---------- camera ----------
+// One media stream for the whole session. iOS Safari stops the first video track when a second getUserMedia call is
+// made (for example to open the mic), which froze the picture on the owner's phone; so the mic reuses this stream's
+// audio track (muted between holds) and the camera is never re-requested unless its track actually ends.
+let mediaStream = null;
 async function startCamera() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: true });
-    stream.getAudioTracks().forEach((t) => t.stop());   // permission asked now; the mic is reopened per hold
-    cam.srcObject = new MediaStream(stream.getVideoTracks());
-    frameSource = "camera";
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
+                                                               audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    attachStream(stream);
     return true;
   } catch (e) {
-    frameSource = "still";
-    return false;
+    try {   // no mic? camera alone still works; the typed box covers questions
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } } });
+      attachStream(stream);
+      return true;
+    } catch (e2) { frameSource = "still"; return false; }
   }
 }
+function attachStream(stream) {
+  mediaStream = stream;
+  stream.getAudioTracks().forEach((t) => { t.enabled = false; });   // muted until the mic is held
+  cam.srcObject = new MediaStream(stream.getVideoTracks());
+  cam.play().catch(() => {});
+  frameSource = "camera";
+  const vt = stream.getVideoTracks()[0];
+  if (vt) vt.addEventListener("ended", () => { cameraAlive(true); });
+}
+// "Camera alive" check: iOS pauses or ends the video track when the page speaks, the mic is held, or the app is
+// backgrounded. Every 2 s (and on return to the foreground) resume the element or re-acquire the stream.
+let reacquiring = false;
+async function cameraAlive(force) {
+  if (frameSource !== "camera" || document.body.dataset.screen === "start" || reacquiring) return;
+  const vt = mediaStream && mediaStream.getVideoTracks()[0];
+  const dead = force || !cam.srcObject || !vt || vt.readyState === "ended" || vt.muted && cam.readyState < 2;
+  if (dead) {
+    reacquiring = true;
+    try { if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop()); await startCamera(); } finally { reacquiring = false; }
+    return;
+  }
+  if (cam.paused) cam.play().catch(() => {});
+}
+setInterval(() => cameraAlive(false), 2000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cameraAlive(false); });
 function showStill(src) { still.src = src; still.hidden = false; cam.hidden = true; frameSource = "still"; }
 function loadDevImage() {
   const m = location.hash.match(/img=([^&]+)/);
@@ -300,9 +331,9 @@ function mark(name, t0, r) {
   timing[name] = m ? `${(ms / 1000).toFixed(1)}s (server ${(+m[1] / 1000).toFixed(1)}s)` : `${(ms / 1000).toFixed(1)}s`;
   footer();
 }
-async function api(path, form, name) {
+async function api(path, form, name, signal) {
   const t0 = performance.now();
-  const r = await fetch(BACKEND + path, { method: form ? "POST" : "GET", body: form, headers: { "X-Show-Me-Key": KEY } });
+  const r = await fetch(BACKEND + path, { method: form ? "POST" : "GET", body: form, headers: { "X-Show-Me-Key": KEY }, signal });
   if (name) mark(name, t0, r);
   if (r.status === 401) throw new Error("Access key wrong. Open the link you were given.");
   if (r.status === 503) throw new Error("Spending limit reached. Paid calls are off.");
@@ -396,18 +427,23 @@ function render(r, opts = {}) {
 // Every CHECK_EVERY_MS a small frame goes to /check. Up to CHECK_MAX_INFLIGHT requests overlap. The server records
 // each verdict; when it reports two consecutive passes the page asks the server to advance, and the server itself
 // re-checks that rule. Results that arrive for an older step, or after a pass already advanced, are dropped.
-const auto = { timer: null, seq: 0, inflight: 0, step: -1, startedAt: 0, paused: false, lastReason: "", advancing: false };
+const CHECK_TIMEOUT_MS = 8000;
+const auto = { timer: null, seq: 0, inflight: 0, step: -1, startedAt: 0, paused: false, lastReason: "", advancing: false, lastDone: 0 };
 function startAutoCheck() {
   stopAutoCheck();
   if (!run || run.status !== "guiding") return;
   auto.step = run.current_step; auto.startedAt = performance.now(); auto.lastReason = ""; auto.advancing = false; auto.firstPassAt = 0;
+  auto.inflight = 0; auto.lastDone = performance.now();      // a fresh step never inherits a stuck in-flight count
   $("watch").classList.remove("pass"); $("watchLabel").textContent = "Watching…";
   auto.timer = setInterval(autoTick, CHECK_EVERY_MS);
   setTimeout(autoTick, 400);   // first look soon after the step is spoken
 }
 function stopAutoCheck() { if (auto.timer) clearInterval(auto.timer); auto.timer = null; }
+// Keep the loop alive no matter what: if a run is being guided and nothing is watching it, start watching.
+setInterval(() => { if (run && run.status === "guiding" && !auto.timer && !busy) startAutoCheck(); }, 3000);
 async function autoTick() {
-  if (!run || run.status !== "guiding" || run.current_step !== auto.step) { stopAutoCheck(); return; }
+  if (!run || run.status !== "guiding" || run.current_step !== auto.step) { stopAutoCheck(); if (run && run.status === "guiding") startAutoCheck(); return; }
+  if (auto.inflight >= CHECK_MAX_INFLIGHT && performance.now() - auto.lastDone > CHECK_TIMEOUT_MS + 2000) auto.inflight = 0;   // recover from lost requests
   if (auto.paused || busy || auto.advancing || auto.inflight >= CHECK_MAX_INFLIGHT) return;
   if (performance.now() - auto.startedAt > CHECK_GIVE_UP_MS) { stopAutoCheck(); giveUp("I've been watching for a minute and can't confirm it."); return; }
   const seq = ++auto.seq, step = auto.step, rid = run.id;
@@ -416,7 +452,9 @@ async function autoTick() {
     const f = await captureFrame(CHECK_LONG_SIDE);
     const form = new FormData(); form.append("frame", f.blob, "check.jpg"); form.append("seq", String(seq)); form.append("auto_advance", "1");
     const t0 = performance.now();
-    const out = await api(`/runs/${rid}/check`, form);
+    const ctl = new AbortController(); const tmo = setTimeout(() => ctl.abort(), CHECK_TIMEOUT_MS);
+    let out;
+    try { out = await api(`/runs/${rid}/check`, form, null, ctl.signal); } finally { clearTimeout(tmo); }
     timing.check = `${((performance.now() - t0) / 1000).toFixed(1)}s`; footer();
     if (!run || run.id !== rid || run.current_step !== step || auto.step !== step) return;   // stale: step moved on
     if (!out.ok) return;
@@ -424,7 +462,8 @@ async function autoTick() {
     if (out.advanced && out.run) {                      // the server reached its two-pass rule and moved on
       auto.advancing = true;
       timing.advance = auto.firstPassAt ? `${((performance.now() - auto.firstPassAt) / 1000).toFixed(1)}s after first pass` : "on first pass";
-      render(out.run); if (out.run.status === "guiding") startAutoCheck();
+      try { render(out.run); } catch (e) { run = out.run; }
+      finally { auto.advancing = false; if (run && run.status === "guiding") startAutoCheck(); }
       return;
     }
     if (v.verdict === "pass") {
@@ -437,8 +476,8 @@ async function autoTick() {
       $("feedback").textContent = reason ? firstSentence(reason)[0] : "";
       if (reason && reason !== auto.lastReason) { auto.lastReason = reason; }   // shown, not spoken: the next step is spoken
     }
-  } catch (e) { /* a dropped check is fine; the next tick tries again */ }
-  finally { auto.inflight--; }
+  } catch (e) { /* a dropped or timed-out check is fine; the next tick tries again */ }
+  finally { auto.inflight = Math.max(0, auto.inflight - 1); auto.lastDone = performance.now(); }
 }
 async function giveUp(why) {
   if (!run) return;
@@ -542,7 +581,9 @@ async function startPcm(stream) {
 }
 async function stopPcm() {
   const p = pcm; pcm = null;
-  p.node.disconnect(); p.stream.getTracks().forEach((t) => t.stop()); await p.ctx.close();
+  p.node.disconnect();
+  if (p.release) p.release(); else p.stream.getTracks().forEach((t) => t.stop());   // shared track: mute, don't stop
+  await p.ctx.close();
   return wavFromFloat32(p.chunks, 16000);
 }
 
@@ -561,20 +602,33 @@ async function sendAudio(blob, type) {
   } catch (e) { busy = false; fail(e.message); }
 }
 
+async function micStream() {
+  // Reuse the session stream's audio track (never a second getUserMedia while the camera runs, see startCamera).
+  const live = mediaStream && mediaStream.getAudioTracks().find((t) => t.readyState === "live");
+  if (live) { live.enabled = true; return { stream: new MediaStream([live]), shared: true }; }
+  const s = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  return { stream: s, shared: false };
+}
+function releaseMic(ms) {
+  if (ms.shared) mediaStream.getAudioTracks().forEach((t) => { t.enabled = false; });
+  else ms.stream.getTracks().forEach((t) => t.stop());
+}
 async function startRecording() {
   if (busy || recorder || pcm) return;
   auto.paused = true;                 // the camera stops judging while the user is talking
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true } });
+    const ms = await micStream();
+    const stream = ms.stream;
     try {
       await startPcm(stream);                       // WAV path
+      pcm.release = () => releaseMic(ms);
     } catch (e) {                                   // fallback: MediaRecorder
       const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
       recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       chunks = [];
       recorder.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
       recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
+        releaseMic(ms);
         const type = recorder.mimeType || "audio/webm";
         recorder = null; mic.classList.remove("rec"); micLabel.textContent = "Hold to talk";
         sendAudio(new Blob(chunks, { type }), type);
