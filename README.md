@@ -43,6 +43,7 @@ All identify and verify calls run on **Muse Spark 1.3** (Meta Model API). On the
 - Day 1 (Oct 27): model tests on the real equipment photos.
 - Day 2 (Oct 28): server deployed on Modal (`nirup2721--show-me-web.us-east.modal.run`); the step verifier runs as an independent call inside the advance-step tool. Paid endpoints need an access key the phone page holds, so strangers cannot spend credits. See [server/README.md](server/README.md).
 - Day 2, later: the phone page ([web/](web/), plain HTML/JS, no framework) on Vercel at **https://askshowme.com**: live camera, hold-to-talk, the SAM outline drawn over the view, steps spoken by the phone, "Done, check it" sends a fresh frame to the verifier, and needs_input shows the message with "I did it, continue".
+  - If your browser shows a prompt asking for an access key, tap Cancel — no key is needed.
 - Day 2, night: **look around.** A general question ("what's here?", "which one?") or a tap on the camera button lists every recognizable object in view (Muse Spark, at most 6, 2-3 word names), outlines each with SAM 3.1, and asks "Which one do you need help with?". Tap an outline or say its name, add the follow-up question, and the normal step loop starts on that object. A general question never invents a task. Cost per look-around frame: one Spark call plus one SAM call per object, about $0.006 to $0.02.
 - Next: Day 4, the full loop on the real machines; Day 5, all four objects at the station.
 
