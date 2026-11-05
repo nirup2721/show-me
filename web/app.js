@@ -58,7 +58,12 @@ const GENERAL = /^\s*(what('s| is| do you see| can you see| are these| is here| 
 function getKey() {
   const m = (location.hash + location.search).match(/[#&?]k=([^&]+)/);
   if (m) { localStorage.setItem("showme_key", decodeURIComponent(m[1])); history.replaceState(null, "", location.pathname + location.hash.replace(/[#&]k=[^&]+/, "").replace(/^&/, "#")); }
-  return (localStorage.getItem("showme_key") || "").trim();   // gate is off for judging: never prompt a visitor for a key
+  let k = localStorage.getItem("showme_key");
+  if (!k) {
+    try { k = prompt("Enter the Show Me access key"); } catch (e) { k = ""; }
+    if (k) localStorage.setItem("showme_key", k.trim());
+  }
+  return k || "";
 }
 async function loadDevKey() {
   if (!/devkey=1/.test(location.hash) || !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return;
