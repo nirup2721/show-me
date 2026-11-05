@@ -12,18 +12,20 @@ from fastapi import Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
-VERSION = "0.6.2"  # bump on every deploy so /health shows which code is live
+VERSION = "0.6.3"  # bump on every deploy so /health shows which code is live
 app = FastAPI(title="Show Me", version=VERSION)
 
 # Access key: every paid endpoint needs it, so strangers who find the address cannot spend credits.
 # The phone page gets it once from the owner (URL fragment or typed in) and keeps it in local storage;
-# it is never embedded in the page source. Set SHOWME_ACCESS_KEY in the Modal secret; unset = open (local dev only).
+# it is never embedded in the page source. The gate runs only when SHOWME_REQUIRE_KEY=1 AND SHOWME_ACCESS_KEY is set.
+# For the Nov 4-9 judging window the gate is OFF (SHOWME_REQUIRE_KEY unset) so any judge can open the live app; the
+# $100 hard stop and the cost logger still cap spend. Re-enable afterwards: set SHOWME_REQUIRE_KEY=1 in the secret.
 _OPEN_PATHS = {"/health", "/", "/docs", "/openapi.json"}
 
 
 @app.middleware("http")
 async def _require_access_key(request: Request, call_next):
-    expected = os.environ.get("SHOWME_ACCESS_KEY", "")
+    expected = os.environ.get("SHOWME_ACCESS_KEY", "") if os.environ.get("SHOWME_REQUIRE_KEY") == "1" else ""
     path = request.url.path
     if request.method != "OPTIONS" and expected and path not in _OPEN_PATHS and not path.startswith("/static"):
         given = request.headers.get("x-show-me-key") or request.query_params.get("key", "")
@@ -65,7 +67,7 @@ def _budget_guard():
 @app.get("/health")
 def health():
     t = costs.totals()
-    return {"ok": True, "version": VERSION, "access_key_required": bool(os.environ.get("SHOWME_ACCESS_KEY")),
+    return {"ok": True, "version": VERSION, "access_key_required": os.environ.get("SHOWME_REQUIRE_KEY") == "1",
             "backends": {b: config.has_backend(b) for b in ("meta", "baseten")},
             "spend": t, "tools": [d["name"] for d in tools.definitions()]}
 
